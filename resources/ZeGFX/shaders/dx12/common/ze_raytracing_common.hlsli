@@ -1,0 +1,10 @@
+#ifndef ZE_RAYTRACING_COMMON_HLSLI
+#define ZE_RAYTRACING_COMMON_HLSLI
+
+#include "ze_ray_payloads.hlsli"
+
+#define RAY_FLAGS_NONE 0
+#define RAY_FLAGS_OPAQUE 1
+#define RAY_FLAGS_CULL_BACK 4
+
+#endif // ZE_RAYTRACING_COMMON_HLSLI

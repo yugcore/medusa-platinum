@@ -1,0 +1,42 @@
+# ==============================================================================
+# Medusa Platinum - Git Ignore Rules
+# ==============================================================================
+
+# Build & Intermediate Output
+bin/
+build/
+*.o
+*.obj
+*.exe
+*.d
+*.pdb
+*.ilk
+*.a
+*.lib
+*.dll
+
+# IDE, Editor & Cache Files
+.vs/
+.vscode/
+.idea/
+.cache/
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+
+# Logs, Diagnostics & Crash Dumps
+logs/
+*.log
+*.stdout.txt
+*.stderr.txt
+dred_crash_report.txt
+
+# Validation Artifacts & Frame Captures
+artifacts/
+*.bmp
+
+# Operating System Files
+Thumbs.db
+Desktop.ini
+.DS_Store

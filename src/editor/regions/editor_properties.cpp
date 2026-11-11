@@ -1,0 +1,370 @@
+#include <medusa/editor/regions/editor_properties.hpp>
+#include <medusa/core/medusa_theme.hpp>
+#include <medusa/ui/medusa_icons.hpp>
+#include <algorithm>
+#include <cmath>
+
+namespace medusa {
+
+AttributeRegion::AttributeRegion(EditorState &state) : state_(state) {
+    init_panels();
+}
+
+void AttributeRegion::layout(const Rect &bounds) {
+    bounds_ = bounds;
+    header_rect_ = Rect(bounds.x, bounds.y, bounds.width, Theme::kAreaHeaderHeight);
+
+    float y = bounds.y + 34.0f;
+    float w = (bounds.width - 24.0f) / 3.0f;
+
+    if (show_transform()) {
+        transform_header_.set_bounds(Rect(bounds.x, y, bounds.width, 22.0f));
+        y += 28.0f;
+
+        if (transform_header_.is_expanded()) {
+            pos_x_.set_bounds(Rect(bounds.x + 8.0f, y, w, Theme::kControlHeight));
+            pos_y_.set_bounds(Rect(bounds.x + 8.0f + w + 6.0f, y, w, Theme::kControlHeight));
+            pos_z_.set_bounds(Rect(bounds.x + 8.0f + (w + 6.0f) * 2.0f, y, w, Theme::kControlHeight));
+            y += 28.0f;
+
+            if (state_.camera_selected() || state_.transformable_selected()) {
+                rot_x_.set_bounds(Rect(bounds.x + 8.0f, y, w, Theme::kControlHeight));
+                rot_y_.set_bounds(Rect(bounds.x + 8.0f + w + 6.0f, y, w, Theme::kControlHeight));
+                rot_z_.set_bounds(Rect(bounds.x + 8.0f + (w + 6.0f) * 2.0f, y, w, Theme::kControlHeight));
+                y += 28.0f;
+            }
+            if (state_.transformable_selected()) {
+                scale_x_.set_bounds(Rect(bounds.x + 8.0f, y, w, Theme::kControlHeight));
+                scale_y_.set_bounds(Rect(bounds.x + 8.0f + w + 6.0f, y, w, Theme::kControlHeight));
+                scale_z_.set_bounds(Rect(bounds.x + 8.0f + (w + 6.0f) * 2.0f, y, w, Theme::kControlHeight));
+                y += 28.0f;
+            }
+        }
+    }
+
+    if (show_lighting()) {
+        light_header_.set_bounds(Rect(bounds.x, y, bounds.width, 22.0f));
+        y += 28.0f;
+        if (light_header_.is_expanded()) {
+            light_x_.set_bounds(Rect(bounds.x + 8.0f, y, w, Theme::kControlHeight));
+            light_y_.set_bounds(Rect(bounds.x + 8.0f + w + 6.0f, y, w, Theme::kControlHeight));
+            light_z_.set_bounds(Rect(bounds.x + 8.0f + (w + 6.0f) * 2.0f, y, w, Theme::kControlHeight));
+            y += 28.0f;
+            light_energy_.set_bounds(Rect(bounds.x + 8.0f, y, bounds.width - 16.0f, Theme::kControlHeight));
+            y += 28.0f;
+        }
+    }
+
+    if (show_optics()) {
+        optics_header_.set_bounds(Rect(bounds.x, y, bounds.width, 22.0f));
+        y += 28.0f;
+
+        if (optics_header_.is_expanded()) {
+            focal_len_.set_bounds(Rect(bounds.x + 8.0f, y, bounds.width - 16.0f, Theme::kControlHeight));
+            y += 28.0f;
+        }
+    }
+
+    if (show_render()) {
+        render_header_.set_bounds(Rect(bounds.x, y, bounds.width, 22.0f));
+        y += 28.0f;
+
+        if (render_header_.is_expanded()) {
+            float dw = (bounds.width - 20.0f) / 2.0f;
+            max_samples_.set_bounds(Rect(bounds.x + 8.0f, y, dw, Theme::kControlHeight));
+            firefly_clamp_.set_bounds(Rect(bounds.x + 8.0f + dw + 6.0f, y, dw, Theme::kControlHeight));
+        }
+    }
+    status_rect_ = Rect(bounds.x + 12.0f, y + 6.0f, bounds.width - 24.0f, 60.0f);
+}
+
+void AttributeRegion::draw(Graphics &gfx) {
+    gfx.fill_rect(bounds_, Theme::kPanelBg);
+
+    // Header (Blender Properties header style)
+    gfx.fill_rect(header_rect_, Theme::kPanelHeaderBg);
+    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kBorderSubtle, 1.0f);
+
+    Rect icon_r(header_rect_.x + 8.0f, header_rect_.y + 5.0f, 14.0f, 14.0f);
+    IconRenderer::draw_icon(gfx, "tool_pivot", icon_r, Theme::kTextSecondary);
+
+    std::string selected_name = state_.active_workspace + " Properties";
+    if (state_.selected_scene_node >= 0 && static_cast<size_t>(state_.selected_scene_node) < state_.scene_nodes.size())
+        selected_name = state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)].name + " Properties";
+    gfx.draw_text(selected_name, Rect(header_rect_.x + 28.0f, header_rect_.y, header_rect_.width - 36.0f, header_rect_.height),
+                  Theme::kTextPrimary, Theme::kPanelTitleFont, true, false, true, Theme::kUiFontFamily);
+
+    if (show_transform()) {
+        pos_x_.set_value(state_.pos_x); pos_y_.set_value(state_.pos_y); pos_z_.set_value(state_.pos_z);
+        rot_x_.set_value(state_.rot_x); rot_y_.set_value(state_.rot_y); rot_z_.set_value(state_.rot_z);
+        transform_header_.draw(gfx);
+        if (transform_header_.is_expanded()) {
+            pos_x_.draw(gfx);
+            pos_y_.draw(gfx);
+            pos_z_.draw(gfx);
+
+            if (state_.camera_selected() || state_.transformable_selected()) {
+                rot_x_.draw(gfx);
+                rot_y_.draw(gfx);
+                rot_z_.draw(gfx);
+            }
+            if (state_.transformable_selected()) {
+                scale_x_.set_value(state_.scale_x); scale_y_.set_value(state_.scale_y); scale_z_.set_value(state_.scale_z);
+                scale_x_.draw(gfx); scale_y_.draw(gfx); scale_z_.draw(gfx);
+            }
+        }
+    }
+
+    if (show_lighting()) {
+        light_header_.draw(gfx);
+        if (light_header_.is_expanded()) {
+            light_x_.set_value(state_.key_light_x); light_y_.set_value(state_.key_light_y);
+            light_z_.set_value(state_.key_light_z); light_energy_.set_value(state_.key_light_energy);
+            light_x_.draw(gfx); light_y_.draw(gfx); light_z_.draw(gfx); light_energy_.draw(gfx);
+        }
+    }
+
+    if (show_optics()) {
+        optics_header_.draw(gfx);
+        if (optics_header_.is_expanded()) {
+            focal_len_.set_value(state_.focal_length);
+            focal_len_.draw(gfx);
+        }
+    }
+
+    if (show_render()) {
+        render_header_.draw(gfx);
+        if (render_header_.is_expanded()) {
+            max_samples_.set_value(static_cast<float>(state_.max_samples_per_pixel));
+            firefly_clamp_.set_value(state_.firefly_clamp);
+            max_samples_.draw(gfx);
+            firefly_clamp_.draw(gfx);
+        }
+    }
+    if (state_.mesh_selected()) {
+        const std::string render_state = effectively_renderable(state_.selected_scene_node)
+            ? "Included in production render" : "Excluded from production render";
+        gfx.draw_text(render_state, Rect(status_rect_.x, status_rect_.y,
+                                         status_rect_.width, 18.0f),
+                      Theme::kTextSecondary, Theme::kSmallFont, false, false, true, Theme::kUiFontFamily);
+    }
+    if (state_.transformable_selected() && show_transform()) {
+        gfx.draw_text("World-space translation · applied on release", Rect(status_rect_.x,
+                                                                             status_rect_.y + (state_.mesh_selected() ? 18.0f : 0.0f),
+                                                                             status_rect_.width, 18.0f),
+                      Theme::kTextSecondary, Theme::kSmallFont, false, false, true, Theme::kUiFontFamily);
+        gfx.draw_text("Rotation offset and scale factor · applied on release",
+                      Rect(status_rect_.x, status_rect_.y + (state_.mesh_selected() ? 36.0f : 18.0f),
+                           status_rect_.width, 18.0f), Theme::kTextSecondary, Theme::kSmallFont,
+                      false, false, true, Theme::kUiFontFamily);
+    }
+    if (state_.scene_nodes.empty() && state_.selected_scene_node < 0) {
+        const float centerY = bounds_.y + std::max(110.0f, bounds_.height * 0.42f);
+        gfx.draw_text("Nothing selected", Rect(bounds_.x + 12.0f, centerY, bounds_.width - 24.0f, 22.0f),
+                      Theme::kTextSecondary, 12.0f, true, true, true, Theme::kUiFontFamily);
+        gfx.draw_text("Import a model to see its transform and render controls.",
+                      Rect(bounds_.x + 20.0f, centerY + 24.0f, bounds_.width - 40.0f, 44.0f),
+                      Theme::kTextMuted, Theme::kSmallFont, false, true, true, Theme::kUiFontFamily);
+    }
+}
+
+bool AttributeRegion::handle_mouse_down(const MouseEvent &e) {
+    if (show_transform() && transform_header_.handle_mouse_down(e)) { layout(bounds_); return true; }
+    if (show_lighting() && light_header_.handle_mouse_down(e)) { layout(bounds_); return true; }
+    if (show_optics() && optics_header_.handle_mouse_down(e)) { layout(bounds_); return true; }
+    if (show_render() && render_header_.handle_mouse_down(e)) { layout(bounds_); return true; }
+
+    if (show_transform() && transform_header_.is_expanded()) {
+        if (pos_x_.handle_mouse_down(e)) return true;
+        if (pos_y_.handle_mouse_down(e)) return true;
+        if (pos_z_.handle_mouse_down(e)) return true;
+        if (state_.camera_selected() || state_.transformable_selected()) {
+            if (rot_x_.handle_mouse_down(e)) return true;
+            if (rot_y_.handle_mouse_down(e)) return true;
+            if (rot_z_.handle_mouse_down(e)) return true;
+        }
+        if (state_.transformable_selected()) {
+            if (scale_x_.handle_mouse_down(e)) return true;
+            if (scale_y_.handle_mouse_down(e)) return true;
+            if (scale_z_.handle_mouse_down(e)) return true;
+        }
+    }
+
+    if (show_lighting() && light_header_.is_expanded()) {
+        if (light_x_.handle_mouse_down(e)) return true;
+        if (light_y_.handle_mouse_down(e)) return true;
+        if (light_z_.handle_mouse_down(e)) return true;
+        if (light_energy_.handle_mouse_down(e)) return true;
+    }
+
+    if (show_optics() && optics_header_.is_expanded()) {
+        if (focal_len_.handle_mouse_down(e)) return true;
+    }
+
+    if (show_render() && render_header_.is_expanded()) {
+        if (max_samples_.handle_mouse_down(e)) return true;
+        if (firefly_clamp_.handle_mouse_down(e)) return true;
+    }
+
+    return false;
+}
+
+bool AttributeRegion::handle_mouse_move(const MouseEvent &e) {
+    bool changed = false;
+    if (transform_header_.handle_mouse_move(e)) changed = true;
+    if (light_header_.handle_mouse_move(e)) changed = true;
+    if (optics_header_.handle_mouse_move(e)) changed = true;
+    if (render_header_.handle_mouse_move(e)) changed = true;
+
+    if (transform_header_.is_expanded()) {
+        if (pos_x_.handle_mouse_move(e)) changed = true;
+        if (pos_y_.handle_mouse_move(e)) changed = true;
+        if (pos_z_.handle_mouse_move(e)) changed = true;
+        if (state_.camera_selected() || state_.transformable_selected()) {
+            if (rot_x_.handle_mouse_move(e)) changed = true;
+            if (rot_y_.handle_mouse_move(e)) changed = true;
+            if (rot_z_.handle_mouse_move(e)) changed = true;
+        }
+        if (state_.transformable_selected()) {
+            if (scale_x_.handle_mouse_move(e)) changed = true;
+            if (scale_y_.handle_mouse_move(e)) changed = true;
+            if (scale_z_.handle_mouse_move(e)) changed = true;
+        }
+    }
+
+    if (light_header_.is_expanded()) {
+        if (light_x_.handle_mouse_move(e)) changed = true;
+        if (light_y_.handle_mouse_move(e)) changed = true;
+        if (light_z_.handle_mouse_move(e)) changed = true;
+        if (light_energy_.handle_mouse_move(e)) changed = true;
+    }
+
+    if (optics_header_.is_expanded()) {
+        if (focal_len_.handle_mouse_move(e)) changed = true;
+    }
+
+    if (render_header_.is_expanded()) {
+        if (max_samples_.handle_mouse_move(e)) changed = true;
+        if (firefly_clamp_.handle_mouse_move(e)) changed = true;
+    }
+
+    return changed;
+}
+
+bool AttributeRegion::handle_mouse_up(const MouseEvent &e) {
+    bool changed = false;
+    bool positionChanged = pos_x_.handle_mouse_up(e);
+    positionChanged = pos_y_.handle_mouse_up(e) || positionChanged;
+    positionChanged = pos_z_.handle_mouse_up(e) || positionChanged;
+    changed = positionChanged || changed;
+    if (positionChanged && state_.transformable_selected() && !state_.camera_selected() &&
+        state_.selected_scene_node >= 0 && !state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)].locked) {
+        const float position[3] = {state_.pos_x, state_.pos_y, state_.pos_z};
+        state_.set_scene_node_translation(static_cast<uint32_t>(state_.selected_scene_node), position);
+    }
+    bool rotationChanged = rot_x_.handle_mouse_up(e);
+    rotationChanged = rot_y_.handle_mouse_up(e) || rotationChanged;
+    rotationChanged = rot_z_.handle_mouse_up(e) || rotationChanged;
+    bool scaleChanged = scale_x_.handle_mouse_up(e);
+    scaleChanged = scale_y_.handle_mouse_up(e) || scaleChanged;
+    scaleChanged = scale_z_.handle_mouse_up(e) || scaleChanged;
+    changed = rotationChanged || scaleChanged || changed;
+    if ((rotationChanged || scaleChanged) && state_.transformable_selected() &&
+        state_.selected_scene_node >= 0 && static_cast<size_t>(state_.selected_scene_node) < state_.scene_nodes.size() &&
+        !state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)].locked) {
+        const float rotation[3] = {state_.rot_x, state_.rot_y, state_.rot_z};
+        const float scale[3] = {state_.scale_x, state_.scale_y, state_.scale_z};
+        state_.set_scene_node_rotation_scale(static_cast<uint32_t>(state_.selected_scene_node), rotation, scale);
+    }
+    if (light_x_.handle_mouse_up(e)) changed = true;
+    if (light_y_.handle_mouse_up(e)) changed = true;
+    if (light_z_.handle_mouse_up(e)) changed = true;
+    if (light_energy_.handle_mouse_up(e)) changed = true;
+    if (focal_len_.handle_mouse_up(e)) changed = true;
+    if (max_samples_.handle_mouse_up(e)) changed = true;
+    if (firefly_clamp_.handle_mouse_up(e)) changed = true;
+    return changed;
+}
+
+bool AttributeRegion::effectively_renderable(int index) const {
+    size_t depth = 0;
+    while (index >= 0 && static_cast<size_t>(index) < state_.scene_nodes.size() &&
+           depth++ < state_.scene_nodes.size()) {
+        const auto& node = state_.scene_nodes[static_cast<size_t>(index)];
+        if (!node.visible || !node.renderable) return false;
+        index = node.parentIndex;
+    }
+    return true;
+}
+
+bool AttributeRegion::show_transform() const {
+    if (state_.active_workspace == "Shot") {
+        return state_.camera_selected() && (state_.active_camera_node < 0 ||
+            (static_cast<size_t>(state_.active_camera_node) < state_.scene_nodes.size() &&
+             !state_.scene_nodes[static_cast<size_t>(state_.active_camera_node)].locked));
+    }
+    return state_.active_workspace == "Scene" && state_.transformable_selected() &&
+        state_.selected_scene_node >= 0 &&
+        static_cast<size_t>(state_.selected_scene_node) < state_.scene_nodes.size() &&
+        !state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)].locked;
+}
+
+bool AttributeRegion::show_lighting() const {
+    return state_.active_workspace == "Scene" && state_.light_selected();
+}
+
+bool AttributeRegion::show_optics() const {
+    return state_.active_workspace == "Shot" && state_.camera_selected();
+}
+
+bool AttributeRegion::show_render() const {
+    return state_.active_workspace == "Production";
+}
+
+void AttributeRegion::init_panels() {
+    Color neutral(0.0f, 0.0f, 0.0f, 0.0f);
+    transform_header_ = CollapsibleSectionWidget("Transform", true);
+    optics_header_ = CollapsibleSectionWidget("Camera Lens", true);
+    light_header_ = CollapsibleSectionWidget("Key Light", true);
+    render_header_ = CollapsibleSectionWidget("Production Sampling", true);
+
+    pos_x_ = ScrubbableNumberWidget("X", state_.pos_x, "m", Theme::kAxisX, -1000.0f, 1000.0f, 0.1f,
+        [this](float v) { state_.pos_x = v; if (state_.camera_selected()) { state_.camera_position[0] = v; state_.update_camera_pose_fields(); } });
+    pos_y_ = ScrubbableNumberWidget("Y", state_.pos_y, "m", Theme::kAxisY, -1000.0f, 1000.0f, 0.1f,
+        [this](float v) { state_.pos_y = v; if (state_.camera_selected()) { state_.camera_position[1] = v; state_.update_camera_pose_fields(); } });
+    pos_z_ = ScrubbableNumberWidget("Z", state_.pos_z, "m", Theme::kAxisZ, -1000.0f, 1000.0f, 0.1f,
+        [this](float v) { state_.pos_z = v; if (state_.camera_selected()) { state_.camera_position[2] = v; state_.update_camera_pose_fields(); } });
+
+    rot_x_ = ScrubbableNumberWidget("X", state_.rot_x, "°", Theme::kAxisX, -360.0f, 360.0f, 1.0f,
+        [this](float v) { state_.rot_x = v; if (state_.camera_selected()) { state_.camera_rotation[0] = v; state_.update_camera_pose_fields(); } });
+    rot_y_ = ScrubbableNumberWidget("Y", state_.rot_y, "°", Theme::kAxisY, -360.0f, 360.0f, 1.0f,
+        [this](float v) { state_.rot_y = v; if (state_.camera_selected()) { state_.camera_rotation[1] = v; state_.update_camera_pose_fields(); } });
+    rot_z_ = ScrubbableNumberWidget("Z", state_.rot_z, "°", Theme::kAxisZ, -360.0f, 360.0f, 1.0f,
+        [this](float v) { state_.rot_z = v; if (state_.camera_selected()) { state_.camera_rotation[2] = v; state_.update_camera_pose_fields(); } });
+
+    scale_x_ = ScrubbableNumberWidget("X", state_.scale_x, "x", Theme::kAxisX, 0.001f, 1000.0f, 0.01f,
+        [this](float v) { state_.scale_x = v; });
+    scale_y_ = ScrubbableNumberWidget("Y", state_.scale_y, "x", Theme::kAxisY, 0.001f, 1000.0f, 0.01f,
+        [this](float v) { state_.scale_y = v; });
+    scale_z_ = ScrubbableNumberWidget("Z", state_.scale_z, "x", Theme::kAxisZ, 0.001f, 1000.0f, 0.01f,
+        [this](float v) { state_.scale_z = v; });
+
+    light_x_ = ScrubbableNumberWidget("X", state_.key_light_x, "m", Theme::kAxisX, -10000.0f, 10000.0f, 0.1f,
+        [this](float v) { state_.key_light_x = v; if (state_.key_light_node >= 0 && static_cast<size_t>(state_.key_light_node) < state_.scene_nodes.size()) { const float position[3] = {state_.key_light_x, state_.key_light_y, state_.key_light_z}; state_.set_scene_node_translation(static_cast<uint32_t>(state_.key_light_node), position); } state_.record_keyframe_if_enabled(); });
+    light_y_ = ScrubbableNumberWidget("Y", state_.key_light_y, "m", Theme::kAxisY, -10000.0f, 10000.0f, 0.1f,
+        [this](float v) { state_.key_light_y = v; if (state_.key_light_node >= 0 && static_cast<size_t>(state_.key_light_node) < state_.scene_nodes.size()) { const float position[3] = {state_.key_light_x, state_.key_light_y, state_.key_light_z}; state_.set_scene_node_translation(static_cast<uint32_t>(state_.key_light_node), position); } state_.record_keyframe_if_enabled(); });
+    light_z_ = ScrubbableNumberWidget("Z", state_.key_light_z, "m", Theme::kAxisZ, -10000.0f, 10000.0f, 0.1f,
+        [this](float v) { state_.key_light_z = v; if (state_.key_light_node >= 0 && static_cast<size_t>(state_.key_light_node) < state_.scene_nodes.size()) { const float position[3] = {state_.key_light_x, state_.key_light_y, state_.key_light_z}; state_.set_scene_node_translation(static_cast<uint32_t>(state_.key_light_node), position); } state_.record_keyframe_if_enabled(); });
+    light_energy_ = ScrubbableNumberWidget("Energy", state_.key_light_energy, "x", neutral, 0.0f, 100.0f, 0.1f,
+        [this](float v) { state_.key_light_energy = v; if (state_.key_light_node >= 0 && static_cast<size_t>(state_.key_light_node) < state_.scene_node_ids.size() && state_.scene_node_ids[static_cast<size_t>(state_.key_light_node)].rfind("medusa-object-light-", 0) == 0) state_.set_scene_node_light_energy(static_cast<uint32_t>(state_.key_light_node), v); state_.record_keyframe_if_enabled(); });
+
+    focal_len_ = ScrubbableNumberWidget("FL", state_.focal_length, "mm", neutral, 10.0f, 500.0f, 1.0f,
+        [this](float v) { state_.focal_length = v; state_.camera_focal_length = v; state_.record_keyframe_if_enabled(); });
+
+    max_samples_ = ScrubbableNumberWidget("Samples", static_cast<float>(state_.max_samples_per_pixel), "spp", neutral, 1.0f, 4096.0f, 16.0f,
+        [this](float v) { state_.max_samples_per_pixel = std::max(1, static_cast<int>(std::round(v / 16.0f) * 16.0f)); });
+    firefly_clamp_ = ScrubbableNumberWidget("Clamp", state_.firefly_clamp, "", neutral, 0.0f, 1000.0f, 1.0f,
+        [this](float v) { state_.firefly_clamp = v; });
+}
+
+} // namespace medusa
