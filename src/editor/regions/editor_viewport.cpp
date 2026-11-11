@@ -60,12 +60,15 @@ void ViewportRegion::draw(Graphics &gfx) {
     float cam_icon_sz = 14.0f;
     float cam_x = camera_rect_.x + 8.0f;
     float cam_icon_y = header_rect_.y + (header_rect_.height - cam_icon_sz) * 0.5f;
-    IconRenderer::draw_icon(gfx, "camera_actor", Rect(cam_x, cam_icon_y, cam_icon_sz, cam_icon_sz), Theme::kTextSecondary);
-    cam_x += cam_icon_sz + 6.0f;
     const bool cameraPilotActive = state_.camera_pilot_active;
     const bool shotWorkspace = state_.active_workspace == "Shot";
+    const bool isScene = (state_.active_workspace == "Scene");
+    IconRenderer::draw_icon(gfx, shotWorkspace ? "camera_actor" : "view_grid",
+                            Rect(cam_x, cam_icon_y, cam_icon_sz, cam_icon_sz), Theme::kTextSecondary);
+    cam_x += cam_icon_sz + 6.0f;
     const std::string camera_label = shotWorkspace ? "SHOT CAMERA  ·  WASD MOVE  ·  RMB LOOK" :
         cameraPilotActive ? "FREE VIEW  ·  WASD MOVE  ·  RMB LOOK" :
+        isScene ? "User Perspective  ▾" :
         state_.active_camera.empty() ? "No active camera" :
         state_.active_camera + " (" + std::to_string(static_cast<int>(std::lround(state_.focal_length))) + "mm)  ▾";
     gfx.draw_text(camera_label, Rect(cam_x, camera_rect_.y, camera_rect_.right() - cam_x, camera_rect_.height),
@@ -93,8 +96,9 @@ void ViewportRegion::draw(Graphics &gfx) {
         gfx.pop_clip();
     }
 
-    // 3. Cinematic Film Safe Frame (Letterbox Matte & Guides)
-    if (state_.show_safe_frame && canvas_rect_.width > 10.0f && canvas_rect_.height > 10.0f) {
+    // 3. Cinematic Film Safe Frame (Letterbox Matte & Guides) - Only active in Shot workspace
+    const bool isShotWorkspace = (state_.active_workspace == "Shot");
+    if (isShotWorkspace && state_.show_safe_frame && canvas_rect_.width > 10.0f && canvas_rect_.height > 10.0f) {
         const float target_aspect = 2.39f;
         const float margin = 16.0f;
         const float avail_w = canvas_rect_.width - margin * 2.0f;
@@ -325,7 +329,9 @@ ViewportRegion::ViewBasis ViewportRegion::view_basis() const {
     result.up = normalized({-sy * sp, cp, cy * sp});
     const float cr = std::cos(roll), sr = std::sin(roll);
     result.up = normalized(result.up * cr + result.right * sr);
-    const float focal = std::clamp(state_.camera_focal_length, 10.0f, 500.0f);
+    const float focal = (state_.active_workspace == "Shot")
+        ? std::clamp(state_.camera_focal_length, 10.0f, 500.0f)
+        : 50.0f;
     result.verticalFov = 2.0f * std::atan(18.0f / focal);
     return result;
 }
@@ -1110,6 +1116,9 @@ void ViewportRegion::populate_popup(int menu) {
             add("Scale", "tool_scale", true, [this]() { state_.active_tool = "tool_scale"; });
             break;
         case 4:
+            add("User Perspective", "view_grid", state_.active_workspace == "Scene", [this]() {
+                state_.activate_workspace("Scene");
+            });
             for (size_t i = 0; i < state_.scene_nodes.size(); ++i) {
                 if (state_.scene_nodes[i].type != zegfx::ProductionNodeType::Camera) continue;
                 add(state_.scene_nodes[i].name.c_str(), "camera_actor", true, [this, i]() {

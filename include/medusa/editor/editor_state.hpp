@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <medusa/core/medusa_screen.hpp>
 #include <medusa/ui/medusa_widgets.hpp>
 #include <medusa/graphics/medusa_graphics.hpp>
@@ -199,6 +199,7 @@ struct EditorState {
             select_active_camera();
             camera_pilot_active = false;
         } else if (workspace == "Scene") {
+            enter_viewport_camera();
             viewport_navigation_active = true;
             camera_pilot_active = false;
         }
