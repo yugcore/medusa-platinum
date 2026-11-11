@@ -1,4 +1,4 @@
-﻿#include <medusa/medusa_editor.hpp>
+#include <medusa/medusa_editor.hpp>
 #include <medusa/editor/drawers/asset_library_drawer.hpp>
 #include <medusa/editor/dialogs/render_setup_dialog.hpp>
 #include <medusa/medusa_production_scene.hpp>
@@ -158,6 +158,8 @@ void MedusaEditor::advance_animation_frame() {
 void MedusaEditor::initialize_render_controls(const zegfx::ProductionScene& scene,
                                              const std::vector<EditorState::SceneNodeBounds>& nodeBounds) {
     state_.scene_nodes = scene.nodes;
+    state_.scene_triangles = scene.triangles;
+    state_.scene_materials = scene.materials;
     state_.rebuild_scene_hierarchy();
     state_.scene_node_bounds = nodeBounds;
     state_.scene_name = scene.sourceName;

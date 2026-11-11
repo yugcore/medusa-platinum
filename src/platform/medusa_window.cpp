@@ -192,7 +192,7 @@ bool Window::create(const std::wstring &title, int width, int height) {
         auto& state = editor_->get_state();
         state.select_scene_node(0);
         state.frame_selected();
-        state.camera_pilot_active = true;
+        state.camera_pilot_active = false;
         state.enter_viewport_camera();
         saved_project_snapshot_ = medusa_project_snapshot(state);
     } else {
@@ -618,7 +618,7 @@ void Window::dispatch_editor_command() {
         OPENFILENAMEW dialog = {};
         dialog.lStructSize = sizeof(dialog);
         dialog.hwndOwner = hwnd_;
-        dialog.lpstrFilter = L"3D assets (*.glb;*.gltf)\0*.glb;*.gltf\0All files (*.*)\0*.*\0";
+        dialog.lpstrFilter = L"3D assets (*.glb;*.gltf;*.obj;*.fbx)\0*.glb;*.gltf;*.obj;*.fbx\0All files (*.*)\0*.*\0";
         dialog.lpstrFile = path.data();
         dialog.nMaxFile = static_cast<DWORD>(path.size());
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -654,6 +654,8 @@ bool Window::load_production_asset(const std::string& path, std::string& error,
         const size_t materialCount = scene.materials.size();
         zegfx::ProductionScene editorScene;
         editorScene.nodes = scene.nodes;
+        editorScene.triangles = scene.triangles;
+        editorScene.materials = scene.materials;
         editorScene.sourceName = scene.sourceName;
         editorScene.activeCameraNode = scene.activeCameraNode;
         editorScene.keyLightNode = scene.keyLightNode;
@@ -905,6 +907,8 @@ bool Window::add_scene_object(const std::string& objectType, std::string& error)
     else if (state.scene_nodes[nodeIndex].type == zegfx::ProductionNodeType::Camera) state.select_active_camera();
 
     if (!scene.triangles.empty()) {
+        state.scene_triangles = scene.triangles;
+        state.scene_materials = scene.materials;
         if (!gfx_.submit_production_scene(std::move(scene), error)) return false;
         render_view_valid_ = false;
         sync_production_controls();

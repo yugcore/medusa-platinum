@@ -143,6 +143,8 @@ struct EditorState {
     std::vector<Keyframe> keyframes;
     std::vector<NodeKeyframe> node_keyframes;
     std::vector<zegfx::ProductionSceneNode> scene_nodes;
+    std::vector<zegfx::ProductionTriangle> scene_triangles;
+    std::vector<zegfx::ProductionMaterial> scene_materials;
     // Stable document identities are owned by Medusa and parallel to the
     // renderer's transient node indices/records.
     std::vector<std::string> scene_node_ids;

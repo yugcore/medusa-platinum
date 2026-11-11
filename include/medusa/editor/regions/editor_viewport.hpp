@@ -71,7 +71,8 @@ private:
     bool project_segment(Vec3 a, Vec3 b, Point& screenA, Point& screenB) const;
     void draw_camera_motion_trail(Graphics& gfx) const;
     void draw_world_grid(Graphics& gfx) const;
-    void draw_starter_cube(Graphics& gfx) const;
+    void draw_scene_geometry(Graphics& gfx) const;
+    void draw_box_node(Graphics& gfx, const zegfx::ProductionSceneNode& node, bool selected) const;
     void draw_empty_scene_label(Graphics& gfx) const;
     Vec3 selected_pivot() const;
     bool gizmo_available() const;

@@ -377,8 +377,7 @@ void transform_imported_tangent_to_node_space(const float world[16], float tange
 
 bool load_production_scene(const std::string& path, zegfx::ProductionScene& scene, std::string& error) {
     if (is_builtin_production_scene(path)) return create_builtin_cube_scene(scene, error);
-    auto importer = zegfx::asset::createGltfImporter();
-    auto imported = importer->load(path, {});
+    auto imported = zegfx::asset::importAsset(path, {});
     if (!imported.success) { error = imported.error; return false; }
     ComPtr<IWICImagingFactory> imagingFactory;
     HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,

@@ -44,8 +44,9 @@ void ViewportRegion::draw(Graphics &gfx) {
     gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kBorderSubtle, 1.0f);
 
     // Editor Icon
+    const bool shotWorkspace = (state_.active_workspace == "Shot");
     Rect icon_r(header_rect_.x + 8.0f, header_rect_.y + 5.0f, 14.0f, 14.0f);
-    IconRenderer::draw_icon(gfx, "camera_actor", icon_r, Theme::kTextSecondary);
+    IconRenderer::draw_icon(gfx, shotWorkspace ? "camera_actor" : "view_grid", icon_r, Theme::kTextSecondary);
 
     for (size_t i = 0; i < menu_buttons_.size(); ++i) {
         menu_buttons_[i].set_active(popup_open_ && active_menu_ == static_cast<int>(i));
@@ -61,7 +62,6 @@ void ViewportRegion::draw(Graphics &gfx) {
     float cam_x = camera_rect_.x + 8.0f;
     float cam_icon_y = header_rect_.y + (header_rect_.height - cam_icon_sz) * 0.5f;
     const bool cameraPilotActive = state_.camera_pilot_active;
-    const bool shotWorkspace = state_.active_workspace == "Shot";
     const bool isScene = (state_.active_workspace == "Scene");
     IconRenderer::draw_icon(gfx, shotWorkspace ? "camera_actor" : "view_grid",
                             Rect(cam_x, cam_icon_y, cam_icon_sz, cam_icon_sz), Theme::kTextSecondary);
@@ -87,14 +87,14 @@ void ViewportRegion::draw(Graphics &gfx) {
 
     // 2. Viewport 3D Canvas
     gfx.fill_rect(canvas_rect_, Theme::kViewportBg);
+    gfx.push_clip(canvas_rect_);
     if (state_.show_grid) {
-        gfx.push_clip(canvas_rect_);
         draw_world_grid(gfx);
-        draw_camera_motion_trail(gfx);
-        draw_starter_cube(gfx);
-        if (state_.scene_nodes.empty()) draw_empty_scene_label(gfx);
-        gfx.pop_clip();
     }
+    draw_camera_motion_trail(gfx);
+    draw_scene_geometry(gfx);
+    if (state_.scene_nodes.empty()) draw_empty_scene_label(gfx);
+    gfx.pop_clip();
 
     // 3. Cinematic Film Safe Frame (Letterbox Matte & Guides) - Only active in Shot workspace
     const bool isShotWorkspace = (state_.active_workspace == "Shot");
@@ -459,10 +459,7 @@ void ViewportRegion::draw_world_grid(Graphics& gfx) const {
         gfx.draw_line(a, b, Theme::kAxisZ, 1.8f);
 }
 
-void ViewportRegion::draw_starter_cube(Graphics& gfx) const {
-    if (state_.scene_nodes.size() != 1 || !state_.scene_nodes[0].visible ||
-        !state_.scene_nodes[0].renderable) return;
-    const auto& node = state_.scene_nodes[0];
+void ViewportRegion::draw_box_node(Graphics& gfx, const zegfx::ProductionSceneNode& node, bool selected) const {
     static constexpr float localVertices[8][3] = {
         {-0.5f,-0.5f,-0.5f}, {0.5f,-0.5f,-0.5f},
         {-0.5f,0.5f,-0.5f},  {0.5f,0.5f,-0.5f},
@@ -507,7 +504,7 @@ void ViewportRegion::draw_starter_cube(Graphics& gfx) const {
         const Vec3 normal = normalized({edgeA.y * edgeB.z - edgeA.z * edgeB.y,
                                         edgeA.z * edgeB.x - edgeA.x * edgeB.z,
                                         edgeA.x * edgeB.y - edgeA.y * edgeB.x});
-        if (dot(normal, view.forward * -1.0f) <= 0.001f) continue;
+        if (dot(normal, view.forward * -1.0f) <= 0.001f && state_.viewport_shading != ViewportShadingMode::Wireframe) continue;
         FaceDraw& draw = faces[visibleCount++];
         Vec3 center{};
         for (int corner = 0; corner < 4; corner++) {
@@ -521,7 +518,9 @@ void ViewportRegion::draw_starter_cube(Graphics& gfx) const {
         draw.depth = dot(center - view.position, view.forward);
         const float shade = std::clamp(0.56f + std::max(0.0f, dot(normal, studioDirection)) * 0.30f,
                                        0.34f, 0.86f);
-        draw.color = Color(shade, shade, shade, 1.0f);
+        draw.color = selected
+            ? Color(std::min(1.0f, shade * 1.15f + 0.1f), shade * 0.95f, shade * 0.80f, 1.0f)
+            : Color(shade, shade, shade, 1.0f);
     }
     for (size_t i = 1; i < visibleCount; ++i) {
         const FaceDraw face = faces[i];
@@ -532,15 +531,150 @@ void ViewportRegion::draw_starter_cube(Graphics& gfx) const {
         }
         faces[j] = face;
     }
-    for (size_t i = 0; i < visibleCount; ++i) gfx.fill_polygon(faces[i].points, 4, faces[i].color);
+    if (state_.viewport_shading != ViewportShadingMode::Wireframe) {
+        for (size_t i = 0; i < visibleCount; ++i) gfx.fill_polygon(faces[i].points, 4, faces[i].color);
+    }
 
-    const Color edgeColor(0.16f, 0.16f, 0.16f, 0.90f);
+    const Color edgeColor = selected ? Theme::kAccent : Color(0.16f, 0.16f, 0.16f, 0.90f);
     for (int vertex = 0; vertex < 8; ++vertex) {
         for (int axis = 0; axis < 3; ++axis) {
             const int adjacent = vertex ^ (1 << axis);
-            if (adjacent <= vertex || !visibleEdges[vertex][adjacent]) continue;
-            gfx.draw_line(screenVertices[vertex], screenVertices[adjacent], edgeColor, 1.0f);
+            if (adjacent <= vertex || (!visibleEdges[vertex][adjacent] && state_.viewport_shading != ViewportShadingMode::Wireframe)) continue;
+            gfx.draw_line(screenVertices[vertex], screenVertices[adjacent], edgeColor, selected ? 1.5f : 1.0f);
         }
+    }
+}
+
+void ViewportRegion::draw_scene_geometry(Graphics& gfx) const {
+    if (state_.scene_nodes.empty()) return;
+
+    // Check if we have triangles from loaded models, the default scene, or primitives
+    if (!state_.scene_triangles.empty()) {
+        const ViewBasis view = view_basis();
+        const Vec3 studioDirection = normalized(Vec3{-0.45f, 0.82f, -0.36f});
+
+        struct TriDraw {
+            Point points[3];
+            float depth = 0.0f;
+            Color color;
+            Color edgeColor;
+            bool selected = false;
+        };
+
+        std::vector<TriDraw> draws;
+        const size_t totalTriangles = state_.scene_triangles.size();
+        const size_t stride = (totalTriangles > 40000) ? (totalTriangles / 20000) : 1;
+        draws.reserve(std::min<size_t>(totalTriangles / stride + 16, 45000));
+
+        for (size_t i = 0; i < totalTriangles; i += stride) {
+            const auto& tri = state_.scene_triangles[i];
+            if (tri.nodeIndex < 0 || static_cast<size_t>(tri.nodeIndex) >= state_.scene_nodes.size()) continue;
+            const auto& node = state_.scene_nodes[static_cast<size_t>(tri.nodeIndex)];
+            if (!node.visible || !node.renderable || node.type != zegfx::ProductionNodeType::Mesh) continue;
+
+            const float* m = node.worldTransform;
+            Vec3 w[3];
+            Point sp[3];
+            float d[3]{};
+            bool ok = true;
+            for (int v = 0; v < 3; ++v) {
+                const float lx = tri.vertices[v].position[0];
+                const float ly = tri.vertices[v].position[1];
+                const float lz = tri.vertices[v].position[2];
+                w[v] = {
+                    m[0] * lx + m[4] * ly + m[8] * lz + m[12],
+                    m[1] * lx + m[5] * ly + m[9] * lz + m[13],
+                    m[2] * lx + m[6] * ly + m[10] * lz + m[14]
+                };
+                if (!project(w[v], sp[v], &d[v]) || d[v] <= 0.05f) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (!ok) continue;
+
+            const Vec3 eA = w[1] - w[0];
+            const Vec3 eB = w[2] - w[0];
+            const Vec3 rawN = {
+                eA.y * eB.z - eA.z * eB.y,
+                eA.z * eB.x - eA.x * eB.z,
+                eA.x * eB.y - eA.y * eB.x
+            };
+            const float len = length(rawN);
+            if (len < 1.0e-7f) continue;
+            const Vec3 normal = rawN * (1.0f / len);
+
+            Vec3 effNormal = normal;
+            float facing = dot(normal, view.forward * -1.0f);
+            if (facing <= 0.001f) {
+                if (totalTriangles <= 4 || state_.viewport_shading == ViewportShadingMode::Wireframe) {
+                    effNormal = normal * -1.0f;
+                    facing = -facing;
+                } else {
+                    continue;
+                }
+            }
+
+            const float avgD = (d[0] + d[1] + d[2]) * 0.33333333f;
+            const float diffuse = std::max(0.0f, dot(effNormal, studioDirection));
+            const float shade = std::clamp(0.50f + diffuse * 0.42f, 0.22f, 0.95f);
+
+            Color baseCol(0.65f, 0.65f, 0.67f, 1.0f);
+            if (tri.materialIndex < state_.scene_materials.size()) {
+                const auto& mat = state_.scene_materials[tri.materialIndex];
+                baseCol = Color(mat.baseColor[0], mat.baseColor[1], mat.baseColor[2], 1.0f);
+            }
+
+            const bool isSelected = (tri.nodeIndex == state_.selected_scene_node);
+            Color faceCol(baseCol.r * shade, baseCol.g * shade, baseCol.b * shade, 1.0f);
+            if (isSelected) {
+                faceCol = Color(std::min(1.0f, faceCol.r * 1.15f + 0.08f),
+                                faceCol.g * 0.98f,
+                                faceCol.b * 0.88f, 1.0f);
+            }
+
+            TriDraw td;
+            td.points[0] = sp[0];
+            td.points[1] = sp[1];
+            td.points[2] = sp[2];
+            td.depth = avgD;
+            td.color = faceCol;
+            td.edgeColor = isSelected ? Theme::kAccent : Color(0.20f, 0.20f, 0.22f, 0.70f);
+            td.selected = isSelected;
+            draws.push_back(td);
+        }
+
+        if (!draws.empty()) {
+            std::sort(draws.begin(), draws.end(), [](const TriDraw& a, const TriDraw& b) {
+                return a.depth > b.depth;
+            });
+
+            if (state_.viewport_shading != ViewportShadingMode::Wireframe) {
+                for (const auto& td : draws) {
+                    gfx.fill_polygon(td.points, 3, td.color);
+                }
+            }
+
+            for (const auto& td : draws) {
+                if (state_.viewport_shading == ViewportShadingMode::Wireframe) {
+                    gfx.draw_line(td.points[0], td.points[1], td.edgeColor, 1.0f);
+                    gfx.draw_line(td.points[1], td.points[2], td.edgeColor, 1.0f);
+                    gfx.draw_line(td.points[2], td.points[0], td.edgeColor, 1.0f);
+                } else if (td.selected && totalTriangles <= 6000) {
+                    gfx.draw_line(td.points[0], td.points[1], Theme::kAccent, 1.0f);
+                    gfx.draw_line(td.points[1], td.points[2], Theme::kAccent, 1.0f);
+                    gfx.draw_line(td.points[2], td.points[0], Theme::kAccent, 1.0f);
+                }
+            }
+            return;
+        }
+    }
+
+    // Fallback: draw box representation for each mesh node
+    for (size_t i = 0; i < state_.scene_nodes.size(); ++i) {
+        const auto& node = state_.scene_nodes[i];
+        if (node.type != zegfx::ProductionNodeType::Mesh || !node.visible || !node.renderable) continue;
+        draw_box_node(gfx, node, static_cast<int>(i) == state_.selected_scene_node);
     }
 }
 
