@@ -1,6 +1,6 @@
 CXX := g++
 CC := gcc
-CXXFLAGS := -std=c++17 -O2 -pthread -Wall -Wextra -Wno-unused-parameter -DWITH_DX12_BACKEND -DZEGFX_WITH_SHADER_TOOLCHAIN -DZEGFX_WITH_ASSIMP=0 -I"include" -I"../ZeGFX/include" -I"../ZeGFX/src" -I"../ZeGFX/third_party/tinyexr" -I"../ZeGFX/third_party/tinyexr/deps/miniz" -I"../BluemanEngineEditor/include" -I"../BluemanEngineEditor" -I"../BluemanEngineEditor/third_party/ufbx" -finput-charset=UTF-8 -fexec-charset=UTF-8
+CXXFLAGS := -std=c++17 -O2 -pthread -Wall -Wextra -Wno-unused-parameter -DWITH_DX12_BACKEND -DZEGFX_WITH_SHADER_TOOLCHAIN -DZEGFX_WITH_ASSIMP=0 -I"include" -I"." -I"third_party" -I"third_party/ufbx" -I"../ZeGFX/include" -I"../ZeGFX/src" -I"../ZeGFX/third_party/tinyexr" -I"../ZeGFX/third_party/tinyexr/deps/miniz" -I"../BluemanEngineEditor/include" -I"../BluemanEngineEditor" -finput-charset=UTF-8 -fexec-charset=UTF-8
 
 BUILD_DIR := build
 BIN_DIR := bin
@@ -91,7 +91,7 @@ ZEGFX_RENDERER_SRCS := \
         ../BluemanEngineEditor/src/assets/pipeline/zegfx_ufbx_translator.cpp \
         ../BluemanEngineEditor/src/assets/pipeline/zegfx_pipeline.cpp \
         ../BluemanEngineEditor/src/assets/pipeline/zegfx_factory.cpp \
-        ../BluemanEngineEditor/third_party/ufbx/ufbx.c
+        third_party/ufbx/ufbx.c
 
 SRCS += $(ZEGFX_RENDERER_SRCS)
 
