@@ -12,7 +12,11 @@ SRCS := src/main.cpp \
         src/ui/medusa_icons.cpp \
         src/core/medusa_screen.cpp \
         src/ui/medusa_widgets.cpp \
+        src/ui/medusa_popup_menu.cpp \
+        src/ui/dcc_transform_triplet.cpp \
         src/editor/medusa_editor.cpp \
+        src/editor/gizmo/transform_gizmo.cpp \
+        src/editor/gizmo/orientation_gizmo.cpp \
         src/editor/drawers/asset_library_drawer.cpp \
         src/editor/dialogs/render_setup_dialog.cpp \
         src/editor/regions/editor_topbar.cpp \
@@ -23,11 +27,19 @@ SRCS := src/main.cpp \
         src/editor/regions/editor_viewport.cpp \
         src/project/medusa_project.cpp \
         src/project/medusa_production_scene.cpp \
+        src/usd/usd_hydra_stage.cpp \
+        src/scripting/medusa_python_engine.cpp \
+        src/editor/drawers/medusa_python_console.cpp \
         $(ZEGFX_RENDERER_SRCS) \
         ../ZeGFX/src/render/pipelines/production/production_pipeline.cpp \
         ../ZeGFX/src/render/pipelines/production/progressive_accumulator.cpp \
         ../ZeGFX/src/render/pipelines/production/aov_manager.cpp \
         ../ZeGFX/src/render/pipelines/production/exr_writer.cpp \
+        ../ZeGFX/src/render/pipelines/production/denoiser.cpp \
+        ../ZeGFX/src/render/pipelines/production/embree_accel.cpp \
+        ../ZeGFX/src/render/lighting/light_tree.cpp \
+        ../ZeGFX/src/render/lighting/adaptive_sampler.cpp \
+        ../ZeGFX/src/render/rhi/rhi_memory.cpp \
         ../ZeGFX/src/diagnostics/diagnostics.cpp \
         ../BluemanEngineEditor/src/assets/import/asset_importer.cpp \
         ../BluemanEngineEditor/src/assets/import/gltf_importer.cpp
@@ -79,7 +91,6 @@ ZEGFX_RENDERER_SRCS := \
         ../ZeGFX/src/render/backends/dx12/features/light_grid_manager.cpp \
         ../ZeGFX/src/render/backends/dx12/features/gi_volume.cpp \
         ../ZeGFX/src/render/backends/dx12/features/reflection_pipeline.cpp \
-        ../ZeGFX/src/render/backends/dx12/features/virtual_geometry.cpp \
         ../ZeGFX/src/render/backends/dx12/features/volumetrics.cpp \
         ../ZeGFX/third_party/bc7enc_rdo/bc7enc.cpp \
         ../ZeGFX/third_party/bc7enc_rdo/rgbcx.cpp \
@@ -98,7 +109,7 @@ SRCS += $(ZEGFX_RENDERER_SRCS)
 ZE_PHYSICS_DIR := ../out/build/windows-x64/release/zephysics-source
 ZE_PHYSICS_LIBS := $(ZE_PHYSICS_DIR)/libZePhysics.a $(ZE_PHYSICS_DIR)/libJolt.a
 
-LIBS := -ld2d1 -ldwrite -ldwmapi -ldxgi -ld3d11 -ld3d12 -ld3dcompiler -ldxguid -lwinmm -lole32 -luuid -lshell32 -lcomdlg32 -lgdi32 -luser32 -lwindowscodecs
+LIBS := -ld2d1 -ldwrite -ldwmapi -ldxgi -ld3d11 -ld3d12 -ld3dcompiler -ldxguid -lwinmm -lole32 -luuid -lshell32 -lcomdlg32 -lgdi32 -luser32 -lwindowscodecs C:/msys64/ucrt64/lib/libembree4.dll.a
 
 TARGET := Medusa_Platinum_ZeGFX.exe
 

@@ -2,6 +2,7 @@
 #include <medusa/core/medusa_types.hpp>
 #include <medusa/graphics/medusa_graphics.hpp>
 #include <medusa/editor/editor_state.hpp>
+#include <medusa/editor/drawers/medusa_python_console.hpp>
 #include <filesystem>
 #include <chrono>
 #include <vector>
@@ -19,14 +20,20 @@ public:
     bool handle_mouse_move(const MouseEvent& e);
     bool handle_mouse_up(const MouseEvent& e);
     bool handle_mouse_wheel(float delta, Point p);
+    bool handle_key_down(int key, bool ctrl, bool shift);
+    bool handle_char(uint32_t codepoint);
 
     void set_root(const std::string& utf8_path);
     bool animating() const;
     bool tick_animation();
     CursorType cursor_type() const;
+    bool is_open() const { return visible_height_ > 0.5f; }
+    Rect get_panel_rect() const { return panel_rect_; }
+
+    void open_console();
 
 private:
-    enum class Tab { Assets, Output };
+    enum class Tab { Assets, Output, Console };
     struct FolderNode {
         std::filesystem::path path;
         std::string name;
@@ -116,11 +123,12 @@ private:
     mutable std::vector<std::pair<size_t, int>> flattened_folders_;
     size_t current_folder_ = 0;
     Rect bar_rect_, panel_rect_, header_rect_;
-    Rect assets_tab_rect_, output_tab_rect_;
+    Rect assets_tab_rect_, output_tab_rect_, console_tab_rect_;
     Rect browse_rect_, refresh_rect_, add_rect_;
     Rect render_current_rect_, render_sequence_rect_;
     Rect tree_rect_, grid_rect_, tree_heading_rect_, grid_heading_rect_;
     Rect tree_rows_rect_, grid_content_rect_;
+    DCCPythonConsoleWidget console_widget_;
 };
 
 } // namespace medusa

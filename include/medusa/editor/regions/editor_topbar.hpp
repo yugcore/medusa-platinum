@@ -2,6 +2,7 @@
 #include <medusa/core/medusa_screen.hpp>
 #include <medusa/editor/editor_state.hpp>
 #include <medusa/ui/medusa_widgets.hpp>
+#include <medusa/ui/medusa_popup_menu.hpp>
 #include <vector>
 #include <string>
 #include <functional>
@@ -20,30 +21,23 @@ public:
     bool handle_mouse_move(const MouseEvent &e) override;
     bool handle_mouse_up(const MouseEvent &e) override;
 
-private:
-    struct PopupItem {
-        std::string label;
-        std::string icon;
-        bool enabled = true;
-        bool separator_before = false;
-        std::function<void()> action;
-    };
+    bool has_open_popup() const { return popup_menu_.is_open(); }
+    bool is_animating() const { return popup_menu_.is_animating(); }
+    const Rect& get_popup_rect() const { return popup_menu_.get_bounds(); }
+    Rect get_cutout_bounds() const { return popup_menu_.get_cutout_bounds(); }
+    void draw_popup(Graphics &gfx);
 
+private:
     void init_widgets();
-    Rect popup_item_rect(size_t index) const;
-    void populate_popup(int menu);
-    void draw_popup(Graphics& gfx);
+    void populate_popup(int menu, bool instant = false);
     bool popup_contains(Point p) const;
 
     EditorState &state_;
-    Rect logo_rect_;
-    float logo_separator_x_ = 0.0f;
-    float render_separator_x_ = 0.0f;
-    Rect popup_rect_;
+    float menus_end_x_ = 0.0f;
+    float workspace_divider_x_ = 0.0f;
     Point last_mouse_pos_;
     int active_menu_ = -1;
-    bool popup_open_ = false;
-    std::vector<PopupItem> popup_items_;
+    DCCPopupMenu popup_menu_;
     std::vector<ButtonWidget> menu_buttons_;
     std::vector<ButtonWidget> mode_buttons_;
     ButtonWidget render_btn_;

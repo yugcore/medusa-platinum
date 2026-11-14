@@ -102,7 +102,7 @@ void ToolshelfRegion::init_tools() {
             action = [this]() { state_.pending_command = "frame_selected"; };
         ButtonWidget btn("", tools[i].first, std::move(action));
         btn.set_flat(true);
-        btn.set_flat_active_fill(false);
+        btn.set_flat_active_fill(true);
         btn.set_tooltip(tools[i].second);
         tool_ids_.push_back(tools[i].first);
         if (tools[i].first == state_.active_tool) btn.set_active(true);

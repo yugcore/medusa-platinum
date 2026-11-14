@@ -10,6 +10,9 @@ namespace medusa {
 
 class AssetLibraryDrawer;
 class RenderSetupDialog;
+class TopbarRegion;
+class ViewportRegion;
+class TimelineRegion;
 
 class MedusaEditor : public Screen {
 public:
@@ -28,6 +31,8 @@ public:
     void initialize_render_controls(const zegfx::ProductionScene& scene,
                                     const std::vector<EditorState::SceneNodeBounds>& nodeBounds = {});
     bool handle_key_down(const KeyEvent& event);
+    bool handle_char(uint32_t codepoint);
+    void open_console();
     Rect get_render_viewport_bounds() const;
     void set_scene_node_state(uint32_t nodeIndex, bool visible, bool renderable);
 
@@ -40,6 +45,9 @@ public:
 
     CursorType get_cursor_type() const;
 
+    bool has_open_popup() const;
+    bool has_animating_popup() const;
+
     EditorState& get_state() { return state_; }
     const EditorState& get_state() const { return state_; }
 
@@ -51,11 +59,14 @@ private:
 
     // Areas
     std::shared_ptr<Area> topbar_area_;
+    std::shared_ptr<TopbarRegion> topbar_region_;
     std::shared_ptr<Area> toolshelf_area_;
     std::shared_ptr<Area> viewport_area_;
+    std::shared_ptr<ViewportRegion> viewport_region_;
     std::shared_ptr<Area> outliner_area_;
     std::shared_ptr<Area> attribute_area_;
     std::shared_ptr<Area> timeline_area_;
+    std::shared_ptr<TimelineRegion> timeline_region_;
 
     // Docking & Resizing Splitter State
     float toolshelf_w_ = 42.0f;

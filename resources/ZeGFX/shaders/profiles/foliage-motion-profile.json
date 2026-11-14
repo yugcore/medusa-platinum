@@ -106,7 +106,6 @@
     "dx12\\post\\tonemap_colorgrade.hlsl": "f56ff44cc611b12f1451a443b44f04f948b8ff152db0a812e082cabba3423197",
     "dx12\\post\\tonemap_output.hlsl": "e174f0afc9d62b4d121197953d5f996ba9efb1aeb8a89881938cf351310d3ed0",
     "dx12\\geometry\\visibility_buffer.hlsl": "65be2fc1e48e51eccc2e48bf65095fb20bed7b079b73f6c1dc21612ce7178677",
-    "dx12\\shadows\\vsm_mark.hlsl": "d3177b7e3343d3a9e82b792b978a0353dd16142469be8214d3a85e76d7eb207e",
     "dx12\\post\\ZExposureReduction.hlsl": "2a23d14c0b1ec7aec3c3323a23d09bb1c602440b0c61ce986f117ebe5c6d7ec5",
     "dx12\\lighting\\zgi_probe_update.hlsl": "b54b0bb398efb8301d5ab9c0181b6169f99c10d8921a2172ac208c58266ca93f",
     "dx12\\common\\ZPostProcessMaterialCommon.hlsli": "b6bb50cf3e81225266762ecc8dfd1c1787bbdec40b3aaa084f5f6281038dd5af",

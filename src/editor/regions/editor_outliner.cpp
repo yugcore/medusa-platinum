@@ -11,9 +11,9 @@ OutlinerRegion::OutlinerRegion(EditorState &state) : state_(state) {}
 void OutlinerRegion::layout(const Rect &bounds) {
     bounds_ = bounds;
     header_rect_ = Rect(bounds.x, bounds.y, bounds.width, Theme::kAreaHeaderHeight);
-    summary_rect_ = Rect(bounds.x + 8.0f, bounds.y + 36.0f, bounds.width - 16.0f, Theme::kControlHeight);
     rebuild_rows();
-    row_viewport_ = Rect(bounds.x, bounds.y + 66.0f, bounds.width, std::max(0.0f, bounds.bottom() - (bounds.y + 66.0f)));
+    row_viewport_ = Rect(bounds.x, bounds.y + Theme::kAreaHeaderHeight + 2.0f, bounds.width,
+                         std::max(0.0f, bounds.bottom() - (bounds.y + Theme::kAreaHeaderHeight + 2.0f)));
     const float contentHeight = static_cast<float>(rows_.size()) * Theme::kOutlinerRowHeight;
     scroll_offset_ = std::clamp(scroll_offset_, 0.0f, std::max(0.0f, contentHeight - row_viewport_.height));
     position_rows();
@@ -25,7 +25,7 @@ void OutlinerRegion::draw(Graphics &gfx) {
 
     // Header (Blender Outliner style)
     gfx.fill_rect(header_rect_, Theme::kPanelHeaderBg);
-    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kBorderSubtle, 1.0f);
+    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kDockDivider, 1.0f);
 
     // Outliner Icon
     Rect icon_r(header_rect_.x + 8.0f, header_rect_.y + 5.0f, 14.0f, 14.0f);
@@ -33,8 +33,13 @@ void OutlinerRegion::draw(Graphics &gfx) {
 
     // Title
     const std::string title = state_.scene_name.empty() ? "Scene Collection" : state_.scene_name;
-    gfx.draw_text(title, Rect(header_rect_.x + 30.0f, header_rect_.y, header_rect_.width - 90.0f, header_rect_.height),
+    gfx.draw_text(title, Rect(header_rect_.x + 28.0f, header_rect_.y, header_rect_.width - 150.0f, header_rect_.height),
                   Theme::kTextPrimary, Theme::kPanelTitleFont, true, false, true, Theme::kUiFontFamily);
+
+    // Item count badge in header
+    const std::string summary = std::to_string(state_.scene_nodes.size()) + " items";
+    gfx.draw_text(summary, Rect(header_rect_.right() - 140.0f, header_rect_.y, 76.0f, header_rect_.height),
+                  Theme::kTextMuted, Theme::kSmallFont, false, true, true, Theme::kUiFontFamily);
 
     // Restriction Column Icons on Header
     float col_x = header_rect_.right() - 56.0f;
@@ -43,13 +48,6 @@ void OutlinerRegion::draw(Graphics &gfx) {
     IconRenderer::draw_icon(gfx, "toggle_lock_on", Rect(col_x, header_rect_.y + 5.0f, 14.0f, 14.0f), Theme::kTextMuted);
     col_x += 18.0f;
     IconRenderer::draw_icon(gfx, "camera_actor", Rect(col_x, header_rect_.y + 5.0f, 14.0f, 14.0f), Theme::kTextMuted);
-
-    gfx.fill_rect(summary_rect_, Theme::kControlBg);
-    gfx.draw_rect(summary_rect_, Theme::kBorderSubtle, 1.0f);
-    const std::string summary = std::to_string(state_.scene_nodes.size()) + " scene items";
-    gfx.draw_text(summary, Rect(summary_rect_.x + 8.0f, summary_rect_.y,
-                                summary_rect_.width - 16.0f, summary_rect_.height),
-                  Theme::kTextSecondary, Theme::kSmallFont, false, false, true, Theme::kUiFontFamily);
 
     // Draw only rows intersecting the visible portion of the hierarchy.
     gfx.push_clip(row_viewport_);
@@ -60,18 +58,18 @@ void OutlinerRegion::draw(Graphics &gfx) {
 
     const float contentHeight = static_cast<float>(rows_.size()) * Theme::kOutlinerRowHeight;
     if (contentHeight > row_viewport_.height && row_viewport_.height > 0.0f) {
-        const float trackX = bounds_.right() - 4.0f;
-        const Rect track(trackX, row_viewport_.y, 3.0f, row_viewport_.height);
-        gfx.fill_rect(track, Theme::kScrollbarTrack);
+        const float trackX = bounds_.right() - 5.0f;
+        const Rect track(trackX, row_viewport_.y + 2.0f, 3.0f, row_viewport_.height - 4.0f);
+        gfx.fill_rounded_rect(track, 1.5f, Theme::kScrollbarTrack);
         const float thumbHeight = std::max(18.0f, track.height * row_viewport_.height / contentHeight);
         const float travel = std::max(0.0f, track.height - thumbHeight);
         const float range = std::max(1.0f, contentHeight - row_viewport_.height);
-        gfx.fill_rect(Rect(trackX, track.y + travel * scroll_offset_ / range, track.width, thumbHeight),
-                      Theme::kScrollbarThumb);
+        gfx.fill_rounded_rect(Rect(trackX, track.y + travel * scroll_offset_ / range, track.width, thumbHeight),
+                              1.5f, Theme::kScrollbarThumb);
     }
     if (state_.scene_nodes.empty()) {
         const float center = bounds_.x + bounds_.width * 0.5f;
-        const float top = summary_rect_.bottom() + 30.0f;
+        const float top = header_rect_.bottom() + 30.0f;
         IconRenderer::draw_icon(gfx, "file_import", Rect(center - 12.0f, top, 24.0f, 24.0f), Theme::kTextMuted);
         gfx.draw_text("Scene is empty", Rect(bounds_.x + 12.0f, top + 30.0f, bounds_.width - 24.0f, 20.0f),
                       Theme::kTextSecondary, 12.0f, true, true, true, Theme::kUiFontFamily);

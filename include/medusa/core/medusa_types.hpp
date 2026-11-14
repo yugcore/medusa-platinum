@@ -58,7 +58,9 @@ enum class CursorType {
 enum class ViewportShadingMode : uint8_t {
     Wireframe = 0,
     Solid = 1,
-    Rendered = 2
+    RealTime = 2,
+    PathTracer = 3,
+    Rendered = PathTracer
 };
 
 enum class MouseButton {

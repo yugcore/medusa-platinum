@@ -29,10 +29,10 @@ static const wchar_t* kWindowTitle = L"Medusa Platinum - 3D Cinematic Animation 
 
 static uint32_t free_camera_key_mask(WPARAM key) {
     switch (key) {
-        case 'W': return 1u << 0;
-        case 'S': return 1u << 1;
-        case 'A': return 1u << 2;
-        case 'D': return 1u << 3;
+        case 'W': case VK_UP:    return 1u << 0;
+        case 'S': case VK_DOWN:  return 1u << 1;
+        case 'A': case VK_LEFT:  return 1u << 2;
+        case 'D': case VK_RIGHT: return 1u << 3;
         case 'Q': return 1u << 4;
         case 'E': return 1u << 5;
         default: return 0;
@@ -59,6 +59,127 @@ static bool sequence_outputs_exist(const std::wstring& prefix, int startFrame, i
             if (frame >= startFrame && frame <= endFrame) return true;
         } catch (...) {
         }
+    }
+    return false;
+}
+
+static bool pick_scene_node(const EditorState& state, const float rayOrigin[3], const float rayDirection[3],
+                            uint32_t& outNodeIndex, float& outDistance) {
+    if (state.scene_nodes.empty() || !rayOrigin || !rayDirection) return false;
+
+    const float rlen = std::sqrt(rayDirection[0] * rayDirection[0] +
+                                 rayDirection[1] * rayDirection[1] +
+                                 rayDirection[2] * rayDirection[2]);
+    if (rlen < 1e-8f) return false;
+    const float rdx = rayDirection[0] / rlen;
+    const float rdy = rayDirection[1] / rlen;
+    const float rdz = rayDirection[2] / rlen;
+    const float rox = rayOrigin[0];
+    const float roy = rayOrigin[1];
+    const float roz = rayOrigin[2];
+
+    int bestNode = -1;
+    float closestT = 1e30f;
+
+    // 1. Ray vs Scene Triangles (Möller-Trumbore)
+    if (!state.scene_triangles.empty()) {
+        for (const auto& tri : state.scene_triangles) {
+            if (tri.nodeIndex < 0 || static_cast<size_t>(tri.nodeIndex) >= state.scene_nodes.size()) continue;
+            const auto& node = state.scene_nodes[static_cast<size_t>(tri.nodeIndex)];
+            if (!node.visible || !node.renderable || node.locked) continue;
+
+            const float* m = node.worldTransform;
+            float v0[3], v1[3], v2[3];
+            v0[0] = m[0] * tri.vertices[0].position[0] + m[4] * tri.vertices[0].position[1] + m[8] * tri.vertices[0].position[2] + m[12];
+            v0[1] = m[1] * tri.vertices[0].position[0] + m[5] * tri.vertices[0].position[1] + m[9] * tri.vertices[0].position[2] + m[13];
+            v0[2] = m[2] * tri.vertices[0].position[0] + m[6] * tri.vertices[0].position[1] + m[10] * tri.vertices[0].position[2] + m[14];
+
+            v1[0] = m[0] * tri.vertices[1].position[0] + m[4] * tri.vertices[1].position[1] + m[8] * tri.vertices[1].position[2] + m[12];
+            v1[1] = m[1] * tri.vertices[1].position[0] + m[5] * tri.vertices[1].position[1] + m[9] * tri.vertices[1].position[2] + m[13];
+            v1[2] = m[2] * tri.vertices[1].position[0] + m[6] * tri.vertices[1].position[1] + m[10] * tri.vertices[1].position[2] + m[14];
+
+            v2[0] = m[0] * tri.vertices[2].position[0] + m[4] * tri.vertices[2].position[1] + m[8] * tri.vertices[2].position[2] + m[12];
+            v2[1] = m[1] * tri.vertices[2].position[0] + m[5] * tri.vertices[2].position[1] + m[9] * tri.vertices[2].position[2] + m[13];
+            v2[2] = m[2] * tri.vertices[2].position[0] + m[6] * tri.vertices[2].position[1] + m[10] * tri.vertices[2].position[2] + m[14];
+
+            const float e1x = v1[0] - v0[0], e1y = v1[1] - v0[1], e1z = v1[2] - v0[2];
+            const float e2x = v2[0] - v0[0], e2y = v2[1] - v0[1], e2z = v2[2] - v0[2];
+            const float px = rdy * e2z - rdz * e2y;
+            const float py = rdz * e2x - rdx * e2z;
+            const float pz = rdx * e2y - rdy * e2x;
+            const float det = e1x * px + e1y * py + e1z * pz;
+            if (std::abs(det) < 1e-7f) continue;
+            const float invDet = 1.0f / det;
+
+            const float tx = rox - v0[0], ty = roy - v0[1], tz = roz - v0[2];
+            const float u = (tx * px + ty * py + tz * pz) * invDet;
+            if (u < 0.0f || u > 1.0f) continue;
+
+            const float qx = ty * e1z - tz * e1y;
+            const float qy = tz * e1x - tx * e1z;
+            const float qz = tx * e1y - ty * e1x;
+            const float v = (rdx * qx + rdy * qy + rdz * qz) * invDet;
+            if (v < 0.0f || u + v > 1.0f) continue;
+
+            const float t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+            if (t > 0.001f && t < closestT) {
+                closestT = t;
+                bestNode = tri.nodeIndex;
+            }
+        }
+    }
+
+    // 2. Test Lights, Cameras, and Nodes without Triangles
+    for (size_t i = 0; i < state.scene_nodes.size(); ++i) {
+        const auto& node = state.scene_nodes[i];
+        if (!node.visible || node.locked) continue;
+
+        float cx = node.worldTransform[12];
+        float cy = node.worldTransform[13];
+        float cz = node.worldTransform[14];
+        float radius = 0.5f;
+
+        if (node.type == zegfx::ProductionNodeType::Light) {
+            radius = 0.6f;
+        } else if (node.type == zegfx::ProductionNodeType::Camera) {
+            radius = 0.7f;
+        } else if (node.type == zegfx::ProductionNodeType::Mesh) {
+            if (i < state.scene_node_bounds.size() && state.scene_node_bounds[i].valid) {
+                cx += state.scene_node_bounds[i].centerOffset[0];
+                cy += state.scene_node_bounds[i].centerOffset[1];
+                cz += state.scene_node_bounds[i].centerOffset[2];
+                radius = std::max(0.4f, state.scene_node_bounds[i].radius);
+            } else {
+                bool hasTriangles = false;
+                for (const auto& tri : state.scene_triangles) {
+                    if (tri.nodeIndex == static_cast<int>(i)) { hasTriangles = true; break; }
+                }
+                if (hasTriangles) continue;
+                radius = 1.0f;
+            }
+        } else {
+            continue;
+        }
+
+        const float ocx = rox - cx, ocy = roy - cy, ocz = roz - cz;
+        const float b = ocx * rdx + ocy * rdy + ocz * rdz;
+        const float c = ocx * ocx + ocy * ocy + ocz * ocz - radius * radius;
+        const float disc = b * b - c;
+        if (disc >= 0.0f) {
+            const float sdisc = std::sqrt(disc);
+            float t = -b - sdisc;
+            if (t < 0.001f) t = -b + sdisc;
+            if (t > 0.001f && t < closestT) {
+                closestT = t;
+                bestNode = static_cast<int>(i);
+            }
+        }
+    }
+
+    if (bestNode >= 0) {
+        outNodeIndex = static_cast<uint32_t>(bestNode);
+        outDistance = closestT;
+        return true;
     }
     return false;
 }
@@ -148,6 +269,16 @@ bool Window::create(const std::wstring &title, int width, int height) {
         return false;
     }
 
+    // Load custom high-end DCC font (Inter)
+    wchar_t exeModulePath[32768] = {};
+    if (GetModuleFileNameW(nullptr, exeModulePath, static_cast<DWORD>(std::size(exeModulePath))) > 0) {
+        const std::filesystem::path fontPath =
+            std::filesystem::path(exeModulePath).parent_path() / L"resources" / L"fonts" / L"Inter.ttf";
+        if (std::filesystem::exists(fontPath)) {
+            AddFontResourceExW(fontPath.c_str(), FR_PRIVATE, nullptr);
+        }
+    }
+
     RAWINPUTDEVICE mouseInput = {};
     mouseInput.usUsagePage = 0x01; // Generic Desktop Controls
     mouseInput.usUsage = 0x02;     // Mouse
@@ -222,24 +353,30 @@ void Window::request_redraw() {
 }
 
 void Window::render_frame() {
+    const bool isInteractivePT = editor_ && editor_->get_state().viewport_shading == ViewportShadingMode::PathTracer;
     const bool offlineRender = sequence_render_active_ || export_current_on_complete_;
-    gfx_.set_production_render_active(offlineRender);
+    gfx_.set_production_render_active(offlineRender || isInteractivePT);
     sync_production_controls();
     if (editor_) {
         const auto& state = editor_->get_state();
         gfx_.set_viewport_shading_mode(state.viewport_shading);
         gfx_.set_realtime_grid_enabled(state.show_grid);
         gfx_.set_realtime_modal_overlay(state.render_setup_open);
-        gfx_.set_realtime_grid_enabled(state.show_grid);
+        gfx_.set_selected_node(state.selected_scene_node, state.active_tool);
         if (offlineRender) {
             KillTimer(hwnd_, 8);
+        } else if (isInteractivePT) {
+            KillTimer(hwnd_, 8);
+            if (!gfx_.production_render_complete()) {
+                start_production_timer();
+            }
         } else {
             if (production_timer_active_) {
                 KillTimer(hwnd_, 1);
                 production_timer_active_ = false;
             }
             if (gfx_.realtime_view_available() && gfx_.realtime_convergence_pending())
-                SetTimer(hwnd_, 8, 16, nullptr);
+                SetTimer(hwnd_, 8, 8, nullptr);
             else
                 KillTimer(hwnd_, 8);
             if (gfx_.realtime_render_dirty() || state.is_playing)
@@ -251,6 +388,9 @@ void Window::render_frame() {
 
     if (editor_) {
         editor_->draw(gfx_);
+        if (editor_->has_animating_popup()) {
+            SetTimer(hwnd_, 7, 8, nullptr);
+        }
     }
 
     gfx_.end_draw();
@@ -264,14 +404,19 @@ void Window::render_frame() {
 }
 
 void Window::trace_production_frame() {
-    if (!sequence_render_active_ && !export_current_on_complete_) return;
+    const bool isInteractivePT = editor_ && editor_->get_state().viewport_shading == ViewportShadingMode::PathTracer;
+    if (!sequence_render_active_ && !export_current_on_complete_ && !isInteractivePT) return;
     gfx_.trace_production_frame();
+    if (isInteractivePT && !gfx_.production_render_complete()) {
+        request_redraw();
+    }
 }
 
 void Window::start_production_timer() {
+    const bool isInteractivePT = editor_ && editor_->get_state().viewport_shading == ViewportShadingMode::PathTracer;
     if (!hwnd_ || production_timer_active_ || gfx_.production_render_complete() || is_sizing_ ||
-        (!sequence_render_active_ && !export_current_on_complete_)) return;
-    production_timer_active_ = SetTimer(hwnd_, 1, 33, nullptr) != 0;
+        (!sequence_render_active_ && !export_current_on_complete_ && !isInteractivePT)) return;
+    production_timer_active_ = SetTimer(hwnd_, 1, 16, nullptr) != 0;
     gfx_.set_production_render_active(production_timer_active_);
 }
 
@@ -288,12 +433,25 @@ void Window::dispatch_editor_command() {
         if (!defer_project_dirty_) update_project_dirty();
         return;
     }
+    if (command.rfind("material_update:", 0) == 0) {
+        auto& state = editor_->get_state();
+        const uint32_t matIdx = static_cast<uint32_t>(std::stoul(command.substr(16)));
+        if (matIdx < state.scene_materials.size()) {
+            gfx_.update_production_material(matIdx, state.scene_materials[matIdx]);
+            start_production_timer();
+            request_redraw();
+        }
+        return;
+    }
     if (command == "viewport_pick") {
         auto& state = editor_->get_state();
         uint32_t nodeIndex = 0;
         float distance = 0.0f;
-        if (gfx_.pick_production_node(state.pending_pick_origin, state.pending_pick_direction,
-                                      nodeIndex, distance)) {
+        if (pick_scene_node(state, state.pending_pick_origin, state.pending_pick_direction,
+                            nodeIndex, distance)) {
+            state.select_scene_node(nodeIndex);
+        } else if (gfx_.pick_production_node(state.pending_pick_origin, state.pending_pick_direction,
+                                             nodeIndex, distance)) {
             state.select_scene_node(nodeIndex);
         } else {
             state.selected_scene_node = -1;
@@ -475,6 +633,11 @@ void Window::dispatch_editor_command() {
         }
     } else if (command == "exit") {
         PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+    } else if (command == "toggle_python_console") {
+        if (editor_) {
+            editor_->open_console();
+            request_redraw();
+        }
     } else if (command == "choose_asset_library") {
         BROWSEINFOW dialog = {};
         dialog.hwndOwner = hwnd_;
@@ -613,16 +776,18 @@ void Window::dispatch_editor_command() {
             start_production_timer();
             request_redraw();
         }
-    } else if (command == "open_asset") {
+    } else if (command == "open_asset" || command == "import_model" || command == "import_usd") {
         std::vector<wchar_t> path(32768, L'\0');
         OPENFILENAMEW dialog = {};
         dialog.lStructSize = sizeof(dialog);
         dialog.hwndOwner = hwnd_;
-        dialog.lpstrFilter = L"3D assets (*.glb;*.gltf;*.obj;*.fbx)\0*.glb;*.gltf;*.obj;*.fbx\0All files (*.*)\0*.*\0";
+        dialog.lpstrFilter = command == "import_usd"
+            ? L"USD Hydra Stages (*.usd;*.usda;*.usdc;*.usdz)\0*.usd;*.usda;*.usdc;*.usdz\0All files (*.*)\0*.*\0"
+            : L"3D Assets & USD Stages (*.glb;*.gltf;*.usd;*.usda;*.usdc;*.usdz;*.obj;*.fbx)\0*.glb;*.gltf;*.usd;*.usda;*.usdc;*.usdz;*.obj;*.fbx\0USD Stages (*.usd;*.usda;*.usdc;*.usdz)\0*.usd;*.usda;*.usdc;*.usdz\0All files (*.*)\0*.*\0";
         dialog.lpstrFile = path.data();
         dialog.nMaxFile = static_cast<DWORD>(path.size());
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-        dialog.lpstrTitle = L"Open Production Asset";
+        dialog.lpstrTitle = command == "import_usd" ? L"Import USD Hydra Stage" : L"Open Production Asset";
         if (GetOpenFileNameW(&dialog)) {
             if (confirm_project_change()) {
                 std::string error;
@@ -909,6 +1074,7 @@ bool Window::add_scene_object(const std::string& objectType, std::string& error)
     if (!scene.triangles.empty()) {
         state.scene_triangles = scene.triangles;
         state.scene_materials = scene.materials;
+        state.sync_active_material_to_fields();
         if (!gfx_.submit_production_scene(std::move(scene), error)) return false;
         render_view_valid_ = false;
         sync_production_controls();
@@ -1420,8 +1586,15 @@ bool Window::sync_production_controls() {
     zegfx::ProductionRenderSettings settings;
     settings.maxSamplesPerPixel = static_cast<uint32_t>(std::clamp(state.max_samples_per_pixel, 1, 4096));
     settings.clampFireflies = std::max(0.0f, state.firefly_clamp);
+    settings.enableLightTree = state.light_tree_enabled;
+    settings.enableAdaptiveSampling = state.adaptive_sampling_enabled;
+    settings.adaptiveThreshold = state.adaptive_sampling_threshold;
     auto sameSettings = [](const zegfx::ProductionRenderSettings& a, const zegfx::ProductionRenderSettings& b) {
-        return a.maxSamplesPerPixel == b.maxSamplesPerPixel && a.clampFireflies == b.clampFireflies;
+        return a.maxSamplesPerPixel == b.maxSamplesPerPixel &&
+               a.clampFireflies == b.clampFireflies &&
+               a.enableLightTree == b.enableLightTree &&
+               a.enableAdaptiveSampling == b.enableAdaptiveSampling &&
+               a.adaptiveThreshold == b.adaptiveThreshold;
     };
     if (!render_settings_valid_ || !sameSettings(settings, last_render_settings_)) {
         std::string error;
@@ -1487,7 +1660,16 @@ bool Window::sync_production_controls() {
         KillTimer(hwnd_, 9);
         SetTimer(hwnd_, 9, 300, nullptr);
     }
-    if (useSceneCamera && (!render_view_valid_ || !sameView(view, last_render_view_))) {
+    const bool isInteractivePT = state.viewport_shading == ViewportShadingMode::PathTracer;
+    if (state.material_dirty) {
+        const uint32_t activeIdx = state.active_material_index();
+        if (activeIdx < state.scene_materials.size()) {
+            gfx_.update_production_material(activeIdx, state.scene_materials[activeIdx]);
+        }
+        state.material_dirty = false;
+        changed = true;
+    }
+    if ((useSceneCamera || isInteractivePT) && (!render_view_valid_ || !sameView(view, last_render_view_))) {
         std::string error;
         if (gfx_.update_production_view(view, error)) {
             last_render_view_ = view;
@@ -1644,6 +1826,7 @@ void Window::on_mouse_move(int x, int y, WPARAM wParam) {
         const bool changed = editor_->handle_mouse_move(ev);
         if (changed) {
             request_redraw();
+            if (is_dragging_ || (editor_ && editor_->has_open_popup())) UpdateWindow(hwnd_);
             if (!editor_->get_state().pending_command.empty()) {
                 const auto& command = editor_->get_state().pending_command;
                 const bool sceneTransform = command == "scene_node_translation" || command == "scene_node_rotation_scale";
@@ -1684,6 +1867,7 @@ void Window::on_mouse_down(MouseButton btn, int x, int y, WPARAM wParam) {
         }
         dispatch_editor_command();
         if (editor_->asset_drawer_animating()) SetTimer(hwnd_, 6, 16, nullptr);
+        if (editor_->has_animating_popup()) SetTimer(hwnd_, 7, 8, nullptr);
     }
 }
 
@@ -1796,6 +1980,16 @@ LRESULT Window::handle_message(UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case WM_TIMER:
+            if (wParam == 7) {
+                if (!editor_ || !editor_->has_animating_popup()) {
+                    KillTimer(hwnd_, 7);
+                    request_redraw();
+                    return 0;
+                }
+                request_redraw();
+                UpdateWindow(hwnd_);
+                return 0;
+            }
             if (wParam == 6) {
                 if (!editor_ || !editor_->tick_asset_drawer_animation()) {
                     KillTimer(hwnd_, 6);
@@ -1973,6 +2167,15 @@ LRESULT Window::handle_message(UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 interaction_snapshot_.clear();
                 interaction_project_id_.clear();
+            }
+            break;
+
+        case WM_CHAR:
+            if (editor_ && wParam >= 32) {
+                if (editor_->handle_char(static_cast<uint32_t>(wParam))) {
+                    request_redraw();
+                    return 0;
+                }
             }
             break;
 

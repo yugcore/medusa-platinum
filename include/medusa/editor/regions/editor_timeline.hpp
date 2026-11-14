@@ -2,6 +2,7 @@
 #include <medusa/core/medusa_screen.hpp>
 #include <medusa/editor/editor_state.hpp>
 #include <medusa/ui/medusa_widgets.hpp>
+#include <medusa/ui/medusa_popup_menu.hpp>
 #include <vector>
 #include <string>
 
@@ -18,11 +19,18 @@ public:
     bool handle_mouse_up(const MouseEvent &e) override;
     bool handle_mouse_wheel(float delta, Point p) override;
 
+    bool has_open_popup() const { return popup_menu_.is_open(); }
+    bool is_animating() const { return popup_menu_.is_animating(); }
+    Rect get_cutout_bounds() const { return popup_menu_.get_cutout_bounds(); }
+    void draw_popup(Graphics &gfx);
+
 private:
     void init_header();
+    void open_playback_menu();
     void refresh_channels();
 
     EditorState &state_;
+    DCCPopupMenu popup_menu_;
     Rect header_rect_;
     Rect time_icon_rect_;
     Rect autokey_rect_;

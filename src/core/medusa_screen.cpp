@@ -18,8 +18,8 @@ void Area::layout(const Rect &bounds) {
 }
 
 void Area::draw(Graphics &gfx) {
-    // Keep dock areas visually connected; separators define the work regions
-    // without outlining every panel like a floating card.
+    // Keep dock areas visually connected while giving each work region a
+    // clear, recessed seam instead of outlining panels like floating cards.
     gfx.fill_rect(bounds_, Theme::kPanelBg);
 
     for (auto &reg : regions_) {
@@ -30,10 +30,14 @@ void Area::draw(Graphics &gfx) {
         }
     }
 
+    gfx.draw_line(Point(bounds_.right() - 1.0f, bounds_.y), Point(bounds_.right() - 1.0f, bounds_.bottom()),
+                  Theme::kDockEdge, 1.0f);
     gfx.draw_line(Point(bounds_.right(), bounds_.y), Point(bounds_.right(), bounds_.bottom()),
-                  Theme::kBorderSubtle, 1.0f);
+                  Theme::kDockDivider, 1.0f);
+    gfx.draw_line(Point(bounds_.x, bounds_.bottom() - 1.0f), Point(bounds_.right(), bounds_.bottom() - 1.0f),
+                  Theme::kDockEdge, 1.0f);
     gfx.draw_line(Point(bounds_.x, bounds_.bottom()), Point(bounds_.right(), bounds_.bottom()),
-                  Theme::kBorderSubtle, 1.0f);
+                  Theme::kDockDivider, 1.0f);
 }
 
 bool Area::handle_mouse_down(const MouseEvent &e) {

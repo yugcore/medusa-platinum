@@ -32,6 +32,13 @@ public:
     bool resize_realtime_viewport(uint32_t width, uint32_t height);
     void set_realtime_interactive(bool active);
     void set_viewport_shading_mode(ViewportShadingMode mode);
+    void set_selected_node(int nodeIndex, const std::string& activeTool = "tool_select") {
+        if (selected_node_index_ != nodeIndex || active_tool_ != activeTool) {
+            selected_node_index_ = nodeIndex;
+            active_tool_ = activeTool;
+            realtime_render_dirty_ = true;
+        }
+    }
     bool set_realtime_view(const zegfx::ProductionViewSettings& view);
     bool render_realtime_view();
     bool realtime_render_dirty() const { return realtime_render_dirty_; }
@@ -83,10 +90,16 @@ public:
     bool production_render_complete() const;
     zegfx::ProductionRenderProgress production_render_progress() const;
     bool has_production_scene() const { return production_scene_submitted_; }
+    bool update_production_material(uint32_t materialIndex, const zegfx::ProductionMaterial& material);
     bool draw_realtime_viewport(const Rect& bounds, const Rect* overlayBounds = nullptr);
+    bool draw_realtime_viewport(const Rect& bounds, const std::vector<Rect>& overlayBounds);
+    bool draw_pathtracer_viewport(const Rect& bounds, bool denoiseActive,
+                                  zegfx::ProductionAOV aov = zegfx::ProductionAOV::Beauty);
+    void hide_realtime_viewport();
     void set_realtime_grid_enabled(bool enabled);
     void set_realtime_modal_overlay(bool enabled);
     void set_realtime_viewport_overlay_bounds(const Rect* overlayBounds);
+    void set_realtime_viewport_overlay_bounds(const std::vector<Rect>& overlayBounds);
 
     ID2D1DeviceContext* get_context() const { return d2d_context_.Get(); }
     ID2D1Factory1* get_factory() const { return d2d_factory_.Get(); }
@@ -128,6 +141,11 @@ private:
     ComPtr<IDXGISwapChain1> swapchain_;
     ComPtr<IDXGISwapChain3> swapchain3_;
     ComPtr<ID2D1Bitmap1> realtime_preview_bitmap_;
+    ComPtr<ID2D1Bitmap1> pathtracer_bitmap_;
+    std::vector<uint8_t> pathtracer_rgba_buffer_;
+    uint32_t pathtracer_width_ = 0;
+    uint32_t pathtracer_height_ = 0;
+    uint32_t last_denoised_sample_ = 0;
     ComPtr<ID3D12Device> d3d12_device_;
     ComPtr<ID3D12CommandQueue> d3d12_queue_;
     ComPtr<ID3D12Resource> realtime_target_;
@@ -144,6 +162,7 @@ private:
     bool realtime_child_bounds_valid_ = false;
     RECT realtime_child_overlay_bounds_{};
     bool realtime_child_overlay_valid_ = false;
+    std::vector<RECT> realtime_child_overlay_rects_;
     Rect realtime_viewport_logical_bounds_{};
     bool realtime_grid_enabled_ = true;
     bool realtime_modal_overlay_active_ = false;
@@ -189,6 +208,12 @@ private:
 
     std::unordered_map<uint32_t, ComPtr<ID2D1SolidColorBrush>> brush_cache_;
     std::unordered_map<std::string, ComPtr<IDWriteTextFormat>> font_cache_;
+
+    int selected_node_index_ = -1;
+    std::string active_tool_ = "tool_select";
+    void draw_realtime_selection_and_gizmo(zegfx::GraphicsBackend* backend,
+                                           const zegfx::ProductionSceneNode& node,
+                                           const std::string& tool);
 };
 
 } // namespace medusa

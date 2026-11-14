@@ -1,5 +1,6 @@
 #include <medusa/medusa_app.hpp>
 #include <windows.h>
+#include <timeapi.h>
 #include <iostream>
 
 namespace medusa {
@@ -7,6 +8,9 @@ namespace medusa {
 MedusaApp::MedusaApp() = default;
 
 int MedusaApp::run(int argc, char* argv[]) {
+    // Enable 1ms high-precision multimedia timer for smooth 120 FPS frame cadence
+    timeBeginPeriod(1);
+
     // Enable Per-Monitor V2 DPI awareness for crystal-clear studio text rendering
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
@@ -49,6 +53,7 @@ int MedusaApp::run(int argc, char* argv[]) {
     if (exit_after_screenshot) {
         window_.trace_production_frame();
         window_.render_frame();
+        timeEndPeriod(1);
         return 0;
     }
 
@@ -59,6 +64,7 @@ int MedusaApp::run(int argc, char* argv[]) {
         DispatchMessageW(&msg);
     }
 
+    timeEndPeriod(1);
     return static_cast<int>(msg.wParam);
 }
 

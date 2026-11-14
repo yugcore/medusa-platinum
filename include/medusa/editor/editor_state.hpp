@@ -80,9 +80,20 @@ struct EditorState {
     bool show_grid = true;
     bool show_safe_frame = true;
     bool show_camera_trail = true;
+    bool denoiser_enabled = true;
     ViewportShadingMode viewport_shading = ViewportShadingMode::Solid;
+    zegfx::ProductionAOV active_aov = zegfx::ProductionAOV::Beauty;
+    std::string active_aov_name = "Beauty";
+    bool light_tree_enabled = true;
+    bool adaptive_sampling_enabled = true;
+    float adaptive_sampling_threshold = 0.02f;
+    uint32_t adaptive_min_samples = 16;
     bool menu_popup_open = false;
     bool viewport_popup_open = false;
+    Rect active_topbar_popup_rect{};
+    Rect active_viewport_popup_rect{};
+    Rect active_modal_rect{};
+    Rect active_drawer_rect{};
     float ui_toolshelf_width = 42.0f;
     float ui_right_deck_width = 310.0f;
     float ui_outliner_ratio = 0.48f;
@@ -168,6 +179,76 @@ struct EditorState {
     std::vector<ProjectAssetReference> asset_references;
     std::vector<ProjectMaterialReference> material_references;
 
+    // OpenPBR Layered Material Inspector state
+    float mat_base_color[4] = {0.8f, 0.8f, 0.8f, 1.0f};
+    float mat_roughness = 0.5f;
+    float mat_metallic = 0.0f;
+    float mat_transmission = 0.0f;
+    float mat_ior = 1.5f;
+    float mat_coat_weight = 0.0f;
+    float mat_coat_roughness = 0.04f;
+    float mat_sheen_weight = 0.0f;
+    float mat_sheen_roughness = 0.3f;
+    float mat_emission_energy = 0.0f;
+    float mat_emission_color[3] = {1.0f, 1.0f, 1.0f};
+    bool material_dirty = false;
+
+    uint32_t active_material_index() const {
+        if (selected_scene_node >= 0) {
+            for (const auto& tri : scene_triangles) {
+                if (tri.nodeIndex == selected_scene_node && tri.materialIndex < scene_materials.size()) {
+                    return tri.materialIndex;
+                }
+            }
+        }
+        return 0;
+    }
+    void sync_active_material_to_fields() {
+        const uint32_t idx = active_material_index();
+        if (idx < scene_materials.size()) {
+            const auto& m = scene_materials[idx];
+            for (int i = 0; i < 4; ++i) mat_base_color[i] = m.baseColor[i];
+            mat_roughness = m.roughness;
+            mat_metallic = m.metallic;
+            mat_transmission = m.transmission;
+            mat_ior = m.ior;
+            mat_coat_weight = m.coatWeight;
+            mat_coat_roughness = m.coatRoughness;
+            mat_sheen_weight = m.sheenWeight;
+            mat_sheen_roughness = m.sheenRoughness;
+            mat_emission_energy = std::max({m.emission[0], m.emission[1], m.emission[2], 0.0f});
+            if (mat_emission_energy > 0.001f) {
+                mat_emission_color[0] = m.emission[0] / mat_emission_energy;
+                mat_emission_color[1] = m.emission[1] / mat_emission_energy;
+                mat_emission_color[2] = m.emission[2] / mat_emission_energy;
+            } else {
+                mat_emission_color[0] = mat_emission_color[1] = mat_emission_color[2] = 1.0f;
+            }
+        }
+    }
+    void sync_fields_to_active_material() {
+        if (scene_materials.empty()) {
+            scene_materials.push_back(zegfx::ProductionMaterial{});
+        }
+        const uint32_t idx = active_material_index();
+        if (idx < scene_materials.size()) {
+            auto& m = scene_materials[idx];
+            for (int i = 0; i < 4; ++i) m.baseColor[i] = mat_base_color[i];
+            m.roughness = mat_roughness;
+            m.metallic = mat_metallic;
+            m.transmission = mat_transmission;
+            m.ior = mat_ior;
+            m.coatWeight = mat_coat_weight;
+            m.coatRoughness = mat_coat_roughness;
+            m.sheenWeight = mat_sheen_weight;
+            m.sheenRoughness = mat_sheen_roughness;
+            m.emission[0] = mat_emission_color[0] * mat_emission_energy;
+            m.emission[1] = mat_emission_color[1] * mat_emission_energy;
+            m.emission[2] = mat_emission_color[2] * mat_emission_energy;
+            material_dirty = true;
+        }
+    }
+
     zegfx::ProductionNodeType selected_node_type() const {
         if (selected_scene_node >= 0 && static_cast<size_t>(selected_scene_node) < scene_nodes.size())
             return scene_nodes[static_cast<size_t>(selected_scene_node)].type;
@@ -249,6 +330,7 @@ struct EditorState {
                 key_light_energy = scene_nodes[nodeIndex].lightEnergy;
             }
         }
+        sync_active_material_to_fields();
     }
 
     void frame_selected() {
@@ -365,9 +447,9 @@ struct EditorState {
         const float yaw = camera_rotation[1] * radians;
         const float cp = std::cos(pitch), sp = std::sin(pitch);
         const float sy = std::sin(yaw), cy = std::cos(yaw);
-        float dx = sy * cp * forwardInput + cy * rightInput;
+        float dx = sy * cp * forwardInput - cy * rightInput;
         float dy = sp * forwardInput + verticalInput;
-        float dz = -cy * cp * forwardInput + sy * rightInput;
+        float dz = -cy * cp * forwardInput - sy * rightInput;
         const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (length <= 1.0e-5f) return;
         dx /= length; dy /= length; dz /= length;
@@ -390,9 +472,9 @@ struct EditorState {
         const float yaw = viewport_rotation[1] * radians;
         const float cp = std::cos(pitch), sp = std::sin(pitch);
         const float sy = std::sin(yaw), cy = std::cos(yaw);
-        float dx = std::sin(yaw) * cp * forwardInput + cy * rightInput;
+        float dx = std::sin(yaw) * cp * forwardInput - cy * rightInput;
         float dy = sp * forwardInput + verticalInput;
-        float dz = -std::cos(yaw) * cp * forwardInput + sy * rightInput;
+        float dz = -std::cos(yaw) * cp * forwardInput - sy * rightInput;
         const float length = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (length <= 1.0e-5f) return;
         dx /= length;

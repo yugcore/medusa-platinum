@@ -52,9 +52,16 @@ void AssetLibraryDrawer::draw(Graphics& gfx) {
         gfx.fill_rect(panel_rect_, Theme::kPanelBg);
         gfx.draw_rect(panel_rect_, Theme::kBorderSubtle, 1.0f);
         gfx.push_clip(panel_rect_);
-        draw_header(gfx);
-        if (tab_ == Tab::Assets) draw_assets(gfx);
-        else draw_output(gfx);
+        if (tab_ == Tab::Assets) {
+            draw_header(gfx);
+            draw_assets(gfx);
+        } else if (tab_ == Tab::Output) {
+            draw_header(gfx);
+            draw_output(gfx);
+        } else if (tab_ == Tab::Console) {
+            console_widget_.layout(panel_rect_);
+            console_widget_.draw(gfx);
+        }
         gfx.pop_clip();
     }
     draw_bottom_bar(gfx);
@@ -66,12 +73,17 @@ bool AssetLibraryDrawer::handle_mouse_down(const MouseEvent& e) {
         pressed_ = true;
         if (assets_tab_rect_.contains(e.pos)) select_tab(Tab::Assets);
         else if (output_tab_rect_.contains(e.pos)) select_tab(Tab::Output);
+        else if (console_tab_rect_.contains(e.pos)) select_tab(Tab::Console);
         else if (tab_ == Tab::Assets) select_tab(Tab::Assets);
-        else select_tab(Tab::Output);
+        else if (tab_ == Tab::Output) select_tab(Tab::Output);
+        else select_tab(Tab::Console);
         return true;
     }
     if (!panel_rect_.contains(e.pos)) return false;
     pressed_ = true;
+    if (tab_ == Tab::Console) {
+        return console_widget_.handle_mouse_down(e);
+    }
     if (tab_ == Tab::Assets) {
         if (std::abs(e.pos.x - tree_divider_x_) <= kSplitterHit && e.pos.y >= tree_rect_.y) {
             dragging_divider_ = true;
@@ -138,6 +150,9 @@ bool AssetLibraryDrawer::handle_mouse_down(const MouseEvent& e) {
 }
 
 bool AssetLibraryDrawer::handle_mouse_move(const MouseEvent& e) {
+    if (tab_ == Tab::Console && is_open_) {
+        if (console_widget_.handle_mouse_move(e)) return true;
+    }
     if (dragging_divider_) {
         tree_ratio_ = std::clamp(e.pos.x / std::max(1.0f, width_), 0.20f, 0.42f);
         layout(width_, height_);
@@ -163,6 +178,9 @@ bool AssetLibraryDrawer::handle_mouse_up(const MouseEvent& e) {
 
 bool AssetLibraryDrawer::handle_mouse_wheel(float delta, Point p) {
     if (!panel_rect_.contains(p) || std::abs(delta) < 1.0e-4f) return false;
+    if (tab_ == Tab::Console) {
+        return console_widget_.handle_mouse_wheel(delta, p);
+    }
     if (tab_ == Tab::Assets && tree_rows_rect_.contains(p)) {
         tree_scroll_ = std::max(0.0f, tree_scroll_ - delta * kTreeRowHeight * 3.0f);
         clamp_scrolls();
@@ -174,6 +192,26 @@ bool AssetLibraryDrawer::handle_mouse_wheel(float delta, Point p) {
         return true;
     }
     return true;
+}
+
+bool AssetLibraryDrawer::handle_key_down(int key, bool ctrl, bool shift) {
+    if (tab_ == Tab::Console && is_open_) {
+        return console_widget_.handle_key_down(key, ctrl, shift);
+    }
+    return false;
+}
+
+bool AssetLibraryDrawer::handle_char(uint32_t codepoint) {
+    if (tab_ == Tab::Console && is_open_) {
+        return console_widget_.handle_char(codepoint);
+    }
+    return false;
+}
+
+void AssetLibraryDrawer::open_console() {
+    tab_ = Tab::Console;
+    is_open_ = true;
+    begin_animation(1.0f);
 }
 
 void AssetLibraryDrawer::set_root(const std::string& utf8_path) {
@@ -241,7 +279,7 @@ std::string AssetLibraryDrawer::file_icon(const std::string& extension) {
 bool AssetLibraryDrawer::can_import_selected() const {
     if (state_.asset_library_selected_path.empty()) return false;
     const std::string ext = lowercase(std::filesystem::u8path(state_.asset_library_selected_path).extension().u8string());
-    return ext == ".glb" || ext == ".gltf";
+    return ext == ".glb" || ext == ".gltf" || ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz" || ext == ".obj" || ext == ".fbx";
 }
 
 void AssetLibraryDrawer::select_tab(Tab tab) {
@@ -384,7 +422,10 @@ int AssetLibraryDrawer::file_at(Point p) const {
 }
 
 int AssetLibraryDrawer::button_at(Point p) const {
-    if (bar_rect_.contains(p)) return assets_tab_rect_.contains(p) ? 0 : output_tab_rect_.contains(p) ? 1 : -1;
+    if (bar_rect_.contains(p)) {
+        return assets_tab_rect_.contains(p) ? 0 : output_tab_rect_.contains(p) ? 1 :
+               console_tab_rect_.contains(p) ? 7 : -1;
+    }
     if (browse_rect_.contains(p)) return 2;
     if (refresh_rect_.contains(p)) return 3;
     if (add_rect_.contains(p)) return 4;
@@ -572,19 +613,23 @@ void AssetLibraryDrawer::draw_bottom_bar(Graphics& gfx) {
     gfx.draw_line(Point(bar_rect_.x, bar_rect_.y), Point(bar_rect_.right(), bar_rect_.y), Theme::kBorderSubtle, 1.0f);
     assets_tab_rect_ = Rect(7.0f, bar_rect_.y + 3.0f, 92.0f, 24.0f);
     output_tab_rect_ = Rect(101.0f, bar_rect_.y + 3.0f, 92.0f, 24.0f);
+    console_tab_rect_ = Rect(195.0f, bar_rect_.y + 3.0f, 130.0f, 24.0f);
     draw_tab(gfx, assets_tab_rect_, "Assets", "file_import", tab_ == Tab::Assets && is_open_);
     draw_tab(gfx, output_tab_rect_, "Output", "action_render", tab_ == Tab::Output && is_open_);
+    draw_tab(gfx, console_tab_rect_, "Python Console", "tool_select", tab_ == Tab::Console && is_open_);
     const float grip_x = width_ * 0.5f;
     for (int i = 0; i < 3; ++i) {
         gfx.fill_rounded_rect(Rect(grip_x - 14.0f + i * 10.0f, bar_rect_.y + 13.0f, 5.0f, 3.0f), 1.0f, Theme::kTextMuted);
     }
-    gfx.draw_text(is_open_ ? "Drawer" : "Open asset and output drawer",
-                  Rect(std::max(205.0f, width_ - 230.0f), bar_rect_.y, 220.0f, bar_rect_.height),
+    gfx.draw_text(is_open_ ? "Drawer" : "Open asset, output & python drawer",
+                  Rect(std::max(335.0f, width_ - 240.0f), bar_rect_.y, 230.0f, bar_rect_.height),
                   Theme::kTextMuted, 9.5f, false, false, true, Theme::kUiFontFamily);
 }
 
 void AssetLibraryDrawer::draw_tab(Graphics& gfx, Rect rect, const std::string& label, const std::string& icon, bool active) {
-    const bool hovered = hovered_button_ == (label == "Assets" ? 0 : 1);
+    const bool hovered = (label == "Assets" && hovered_button_ == 0) ||
+                         (label == "Output" && hovered_button_ == 1) ||
+                         (label == "Python Console" && hovered_button_ == 7);
     if (active || hovered) gfx.fill_rounded_rect(rect, 2.0f, active ? Theme::kSelectionBg : Theme::kControlHover);
     IconRenderer::draw_icon(gfx, icon, Rect(rect.x + 8.0f, rect.y + 5.0f, 14.0f, 14.0f),
                             active ? Theme::kAccentText : Theme::kTextSecondary);

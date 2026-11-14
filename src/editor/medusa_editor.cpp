@@ -1,6 +1,7 @@
 #include <medusa/medusa_editor.hpp>
 #include <medusa/editor/drawers/asset_library_drawer.hpp>
 #include <medusa/editor/dialogs/render_setup_dialog.hpp>
+#include <medusa/scripting/medusa_python_engine.hpp>
 #include <medusa/medusa_production_scene.hpp>
 #include <medusa/editor/regions/editor_topbar.hpp>
 #include <medusa/editor/regions/editor_toolshelf.hpp>
@@ -30,6 +31,7 @@ namespace medusa {
 MedusaEditor::MedusaEditor() {
     asset_drawer_ = std::make_unique<AssetLibraryDrawer>(state_);
     render_setup_dialog_ = std::make_unique<RenderSetupDialog>(state_);
+    scripting::PythonEngine::instance().initialize(&state_, this);
     setup_regions();
 }
 
@@ -44,7 +46,8 @@ void MedusaEditor::setup_regions() {
     toolshelf_area_->add_region(std::make_shared<ToolshelfRegion>(state_));
 
     viewport_area_ = std::make_shared<Area>("Viewport");
-    viewport_area_->add_region(std::make_shared<ViewportRegion>(state_));
+    viewport_region_ = std::make_shared<ViewportRegion>(state_);
+    viewport_area_->add_region(viewport_region_);
 
     outliner_area_ = std::make_shared<Area>("Outliner");
     outliner_area_->add_region(std::make_shared<OutlinerRegion>(state_));
@@ -55,7 +58,8 @@ void MedusaEditor::setup_regions() {
     add_area(attribute_area_);
 
     timeline_area_ = std::make_shared<Area>("Timeline");
-    timeline_area_->add_region(std::make_shared<TimelineRegion>(state_));
+    timeline_region_ = std::make_shared<TimelineRegion>(state_);
+    timeline_area_->add_region(timeline_region_);
     add_area(timeline_area_);
 
     // Viewport popovers and delayed tooltips draw over panels without touching
@@ -66,7 +70,8 @@ void MedusaEditor::setup_regions() {
     add_area(toolshelf_area_);
 
     // Draw the topbar last so its dropdowns render above the surrounding panels.
-    topbar_area_->add_region(std::make_shared<TopbarRegion>(state_));
+    topbar_region_ = std::make_shared<TopbarRegion>(state_);
+    topbar_area_->add_region(topbar_region_);
     add_area(topbar_area_);
 }
 
@@ -160,6 +165,7 @@ void MedusaEditor::initialize_render_controls(const zegfx::ProductionScene& scen
     state_.scene_nodes = scene.nodes;
     state_.scene_triangles = scene.triangles;
     state_.scene_materials = scene.materials;
+    state_.sync_active_material_to_fields();
     state_.rebuild_scene_hierarchy();
     state_.scene_node_bounds = nodeBounds;
     state_.scene_name = scene.sourceName;
@@ -257,6 +263,19 @@ CursorType MedusaEditor::get_cursor_type() const {
 }
 
 void MedusaEditor::draw(Graphics &gfx) {
+    if (state_.render_setup_open && render_setup_dialog_) {
+        state_.active_modal_rect = render_setup_dialog_->panel_bounds(Rect(0.0f, 0.0f, width_, height_));
+        gfx.set_realtime_modal_overlay(true);
+    } else {
+        state_.active_modal_rect = Rect{};
+        gfx.set_realtime_modal_overlay(false);
+    }
+    if (asset_drawer_ && asset_drawer_->is_open()) {
+        state_.active_drawer_rect = asset_drawer_->get_panel_rect();
+    } else {
+        state_.active_drawer_rect = Rect{};
+    }
+
     Screen::draw(gfx);
 
     // Draw active or hovered splitter highlight lines
@@ -275,8 +294,15 @@ void MedusaEditor::draw(Graphics &gfx) {
     if (asset_drawer_) asset_drawer_->draw(gfx);
     if (state_.render_setup_open && render_setup_dialog_) {
         render_setup_dialog_->draw(gfx, Rect(0.0f, 0.0f, width_, height_));
-        const Rect dialogPanel = render_setup_dialog_->panel_bounds(Rect(0.0f, 0.0f, width_, height_));
-        gfx.set_realtime_viewport_overlay_bounds(&dialogPanel);
+    }
+    if (timeline_region_ && timeline_region_->has_open_popup()) {
+        timeline_region_->draw_popup(gfx);
+    }
+    if (viewport_region_ && viewport_region_->has_open_popup()) {
+        viewport_region_->draw_popup(gfx);
+    }
+    if (topbar_region_ && topbar_region_->has_open_popup()) {
+        topbar_region_->draw_popup(gfx);
     }
 }
 
@@ -288,8 +314,9 @@ bool MedusaEditor::handle_mouse_down(const MouseEvent &e) {
         state_.finish_timeline_range_edit(true);
     if (asset_drawer_ && asset_drawer_->handle_mouse_down(e)) return true;
     const std::string workspace_before = state_.active_workspace;
-    const bool popup_was_open = state_.menu_popup_open || state_.viewport_popup_open;
-    if (state_.menu_popup_open && topbar_area_->handle_mouse_down(e)) {
+    const bool popup_was_open = state_.menu_popup_open || state_.viewport_popup_open ||
+                                (timeline_region_ && timeline_region_->has_open_popup());
+    if (state_.menu_popup_open && topbar_region_ && topbar_region_->has_open_popup() && topbar_region_->handle_mouse_down(e)) {
         captured_area_.reset();
         if (workspace_before != state_.active_workspace) {
             const Rect property_bounds = attribute_area_->get_bounds();
@@ -297,7 +324,11 @@ bool MedusaEditor::handle_mouse_down(const MouseEvent &e) {
         }
         return true;
     }
-    if (state_.viewport_popup_open && viewport_area_->handle_mouse_down(e)) {
+    if (viewport_region_ && viewport_region_->has_open_popup() && viewport_region_->handle_mouse_down(e)) {
+        captured_area_.reset();
+        return true;
+    }
+    if (timeline_region_ && timeline_region_->has_open_popup() && timeline_region_->handle_mouse_down(e)) {
         captured_area_.reset();
         return true;
     }
@@ -319,14 +350,27 @@ bool MedusaEditor::handle_mouse_down(const MouseEvent &e) {
         const Rect property_bounds = attribute_area_->get_bounds();
         attribute_area_->set_bounds(property_bounds);
     }
-    const bool popup_dismissed = popup_was_open && !state_.menu_popup_open && !state_.viewport_popup_open;
+    const bool popup_dismissed = popup_was_open && !state_.menu_popup_open && !state_.viewport_popup_open &&
+                                 (!timeline_region_ || !timeline_region_->has_open_popup());
     return handled || popup_dismissed;
 }
 
 bool MedusaEditor::handle_mouse_move(const MouseEvent &e) {
-    bool changed = Screen::handle_mouse_move(e);
-    if (state_.render_setup_open && render_setup_dialog_)
-        return render_setup_dialog_->handle_mouse_move(e, Rect(0.0f, 0.0f, width_, height_)) || changed;
+    bool changed = false;
+    if (topbar_region_ && topbar_region_->has_open_popup()) {
+        if (topbar_region_->handle_mouse_move(e)) changed = true;
+    }
+    if (viewport_region_ && viewport_region_->has_open_popup()) {
+        if (viewport_region_->handle_mouse_move(e)) changed = true;
+    }
+    if (timeline_region_ && timeline_region_->has_open_popup()) {
+        if (timeline_region_->handle_mouse_move(e)) changed = true;
+    }
+    if (Screen::handle_mouse_move(e)) changed = true;
+    if (state_.render_setup_open && render_setup_dialog_) {
+        if (render_setup_dialog_->handle_mouse_move(e, Rect(0.0f, 0.0f, width_, height_))) changed = true;
+        return changed;
+    }
     if (asset_drawer_ && asset_drawer_->handle_mouse_move(e)) return true;
     if (active_splitter_ != SplitterId::None) {
         if (active_splitter_ == SplitterId::RightDeckWidth) {
@@ -395,6 +439,11 @@ bool MedusaEditor::handle_key_down(const KeyEvent& event) {
     auto& state = state_;
     if (state.render_setup_open && render_setup_dialog_)
         return render_setup_dialog_->handle_key_down(event);
+    if (asset_drawer_ && asset_drawer_->is_open()) {
+        if (asset_drawer_->handle_key_down(static_cast<int>(event.key_code), event.ctrl, event.shift)) {
+            return true;
+        }
+    }
     if (state.timeline_range_edit_field != EditorState::TimelineRangeField::None) {
         const uint32_t key = event.key_code;
         int digit = -1;
@@ -458,6 +507,13 @@ bool MedusaEditor::handle_key_down(const KeyEvent& event) {
         if (state.active_workspace != "Shot") state.enter_viewport_camera();
         return true;
     }
+    if (event.key_code == 27 && (state.menu_popup_open || state.viewport_popup_open || (timeline_region_ && timeline_region_->has_open_popup()))) {
+        state.menu_popup_open = false;
+        state.viewport_popup_open = false;
+        state.active_topbar_popup_rect = Rect{};
+        state.active_viewport_popup_rect = Rect{};
+        return true;
+    }
     if (state.camera_pilot_active && event.key_code == 27) {
         state.camera_pilot_active = false;
         return true;
@@ -473,6 +529,31 @@ bool MedusaEditor::handle_key_down(const KeyEvent& event) {
         default: return false;
     }
     return true;
+}
+
+bool MedusaEditor::handle_char(uint32_t codepoint) {
+    if (asset_drawer_ && asset_drawer_->is_open()) {
+        return asset_drawer_->handle_char(codepoint);
+    }
+    return false;
+}
+
+void MedusaEditor::open_console() {
+    if (asset_drawer_) {
+        asset_drawer_->open_console();
+    }
+}
+
+bool MedusaEditor::has_open_popup() const {
+    return (topbar_region_ && topbar_region_->has_open_popup()) ||
+           (viewport_region_ && viewport_region_->has_open_popup()) ||
+           (timeline_region_ && timeline_region_->has_open_popup());
+}
+
+bool MedusaEditor::has_animating_popup() const {
+    return (topbar_region_ && topbar_region_->is_animating()) ||
+           (viewport_region_ && viewport_region_->is_animating()) ||
+           (timeline_region_ && timeline_region_->is_animating());
 }
 
 } // namespace medusa

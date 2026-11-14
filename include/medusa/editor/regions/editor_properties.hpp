@@ -2,6 +2,7 @@
 #include <medusa/core/medusa_screen.hpp>
 #include <medusa/editor/editor_state.hpp>
 #include <medusa/ui/medusa_widgets.hpp>
+#include <medusa/ui/dcc_transform_triplet.hpp>
 
 namespace medusa {
 
@@ -21,6 +22,7 @@ private:
     bool show_lighting() const;
     bool show_optics() const;
     bool show_render() const;
+    bool show_material() const;
     void init_panels();
 
     EditorState &state_;
@@ -31,17 +33,31 @@ private:
     CollapsibleSectionWidget light_header_;
     CollapsibleSectionWidget optics_header_;
     CollapsibleSectionWidget render_header_;
+    CollapsibleSectionWidget material_header_;
 
-    ScrubbableNumberWidget pos_x_, pos_y_, pos_z_;
-    ScrubbableNumberWidget rot_x_, rot_y_, rot_z_;
-    ScrubbableNumberWidget scale_x_, scale_y_, scale_z_;
+    DCCTransformTriplet location_triplet_;
+    DCCTransformTriplet rotation_triplet_;
+    DCCTransformTriplet scale_triplet_;
 
     ScrubbableNumberWidget focal_len_;
 
-    ScrubbableNumberWidget light_x_, light_y_, light_z_;
+    DCCTransformTriplet light_pos_triplet_;
     ScrubbableNumberWidget light_energy_;
     ScrubbableNumberWidget max_samples_;
     ScrubbableNumberWidget firefly_clamp_;
+
+    // OpenPBR Layered Material Inspector widgets
+    Rect mat_color_swatch_rect_;
+    ScrubbableNumberWidget mat_col_r_, mat_col_g_, mat_col_b_;
+    ScrubbableNumberWidget mat_roughness_;
+    ScrubbableNumberWidget mat_metallic_;
+    ScrubbableNumberWidget mat_transmission_;
+    ScrubbableNumberWidget mat_ior_;
+    ScrubbableNumberWidget mat_coat_weight_;
+    ScrubbableNumberWidget mat_coat_roughness_;
+    ScrubbableNumberWidget mat_sheen_weight_;
+    ScrubbableNumberWidget mat_sheen_roughness_;
+    ScrubbableNumberWidget mat_emission_;
 };
 
 } // namespace medusa

@@ -312,12 +312,12 @@ bool Graphics::initialize_realtime_backend(HWND hwnd, uint32_t width, uint32_t h
         hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!realtime_host_window_) return fail("could not create the ZeGFX viewport child window");
 
-    // Match Blueman's renderer-owned child-window swapchain. Keep the quality
-    // preset low for interactive DCC use; ProductionDCC owns final output.
+    // Match Blueman's renderer-owned child-window swapchain. Use High quality
+    // preset for crisp, high-fidelity interactive DCC viewport (shadows, SSAO, SSR, PBR).
     const int hostWidth = std::max(320, viewportWidth);
     const int hostHeight = std::max(180, viewportHeight);
     zegfx::RendererSettings rendererSettings =
-        zegfx::RendererSettings::fromPreset(zegfx::QualityPreset::Low);
+        zegfx::RendererSettings::fromPreset(zegfx::QualityPreset::High);
     rendererSettings.outputWidth = hostWidth;
     rendererSettings.outputHeight = hostHeight;
     rendererSettings.vsync = false;
@@ -337,7 +337,7 @@ bool Graphics::initialize_realtime_backend(HWND hwnd, uint32_t width, uint32_t h
     if (!realtime_camera_.valid()) return fail("ZeGFX could not create the viewport camera");
     nativeBackend->setCamera3DFov(realtime_camera_, 38.0f);
     nativeBackend->setCamera3DClipPlanes(realtime_camera_, 0.01f, 10000.0f);
-    nativeBackend->setTargetFPS(60);
+    nativeBackend->setTargetFPS(120);
     mark_realtime_history_dirty();
     return true;
 #endif
@@ -410,6 +410,7 @@ bool Graphics::recreate_d2d_device_targets() {
     if (d2d_context_) d2d_context_->SetTarget(nullptr);
     target_bitmap_.Reset();
     realtime_preview_bitmap_.Reset();
+    pathtracer_bitmap_.Reset();
     app_logo_.Reset();
     app_logo_loaded_ = false;
     for (auto& bitmap : backbuffer_bitmaps_) bitmap.Reset();
@@ -555,12 +556,11 @@ void Graphics::set_realtime_interactive(bool active) {
 
 bool Graphics::resize_production_output(uint32_t width, uint32_t height) {
     if (!production_pipeline_ || width == 0 || height == 0) return false;
-    // Offline outputs use the explicit project resolution instead of the
-    // lower pixel budget used to keep the interactive viewport responsive.
-    constexpr uint32_t maxWidth = 1920;
-    constexpr uint32_t maxHeight = 1080;
-    width = std::clamp(width, 320u, maxWidth);
-    height = std::clamp(height, 180u, maxHeight);
+    // Support full resolution output up to 8K Ultra-HD (7680x4320)
+    constexpr uint32_t maxWidth = 7680;
+    constexpr uint32_t maxHeight = 4320;
+    width = std::clamp(width, 64u, maxWidth);
+    height = std::clamp(height, 64u, maxHeight);
     production_pipeline_->resize(width, height);
     return true;
 }
@@ -583,6 +583,7 @@ void Graphics::destroy() {
     app_logo_loaded_ = false;
     target_bitmap_.Reset();
     realtime_preview_bitmap_.Reset();
+    pathtracer_bitmap_.Reset();
     if (d2d_context_) d2d_context_->SetTarget(nullptr);
     if (d3d_context_) d3d_context_->Flush();
     realtime_wrapped_target_.Reset();
@@ -746,6 +747,10 @@ void Graphics::mark_realtime_history_dirty() {
 void Graphics::set_viewport_shading_mode(ViewportShadingMode mode) {
     if (viewport_shading_mode_ == mode) return;
     viewport_shading_mode_ = mode;
+    if (mode == ViewportShadingMode::PathTracer) {
+        hide_realtime_viewport();
+        restart_production_render();
+    }
     mark_realtime_history_dirty();
 }
 
@@ -827,7 +832,7 @@ bool Graphics::render_realtime_view() {
             sunIntensity = node.lightEnergy;
         }
     }
-    if (!hasSceneLight && viewport_shading_mode_ == ViewportShadingMode::Rendered) {
+    if (!hasSceneLight && viewport_shading_mode_ == ViewportShadingMode::RealTime) {
         const float keyStrength = std::max({realtime_view_.keyLightColor[0],
             realtime_view_.keyLightColor[1], realtime_view_.keyLightColor[2], 0.0f});
         if (keyStrength > 0.0f) {
@@ -854,14 +859,14 @@ bool Graphics::render_realtime_view() {
         sunDirectionX, sunDirectionY, sunDirectionZ, hasDirectional ? sunIntensity : 0.0f,
         1.0f, 2.2f, 0.08f);
     backend->setRendererV2Lights(localLights, ambient);
-    backend->setDirectionalShadowParams(hasDirectional && viewport_shading_mode_ == ViewportShadingMode::Rendered,
-        1024.0f, 100.0f,
+    backend->setDirectionalShadowParams(hasDirectional && (viewport_shading_mode_ == ViewportShadingMode::RealTime),
+        2048.0f, 150.0f,
         0.0002f, 0.001f, 0.1f, 1.0f, 1.0f, 0.85f,
         sunDirectionX, sunDirectionY, sunDirectionZ);
 
     realtime_renderer_->beginFrame();
     realtime_renderer_->clear(zegfx::Color(29, 31, 35, 0));
-    if (viewport_shading_mode_ == ViewportShadingMode::Rendered && realtime_ao_ && realtime_depth_normal_) {
+    if ((viewport_shading_mode_ == ViewportShadingMode::RealTime) && realtime_ao_ && realtime_depth_normal_) {
         backend->depthNormalCapture(realtime_depth_normal_);
         backend->aoDispatch(realtime_ao_, realtime_depth_normal_);
     }
@@ -881,9 +886,8 @@ bool Graphics::render_realtime_view() {
                                              normalizedStep < 3.5f ? 2.0f : 5.0f);
             constexpr int lineCount = 48;
             const float extent = static_cast<float>(lineCount) * gridStep;
-            const float centerX = std::floor(realtime_view_.cameraPosition[0] / gridStep) * gridStep;
-            const float centerZ = std::floor(realtime_view_.cameraPosition[2] / gridStep) * gridStep;
             for (int i = -lineCount; i <= lineCount; ++i) {
+                if (i == 0) continue;
                 const float offset = static_cast<float>(i);
                 const float fade = 1.0f - std::abs(offset) / static_cast<float>(lineCount + 1);
                 const bool major = (std::abs(i) % 5) == 0;
@@ -891,13 +895,10 @@ bool Graphics::render_realtime_view() {
                 const zegfx::Color color = major
                     ? zegfx::Color(70, 74, 80, alpha)
                     : zegfx::Color(48, 52, 58, alpha);
-                const float x = centerX + offset * gridStep;
-                const float z = centerZ + offset * gridStep;
-                backend->drawLine3D(x, 0.0f, centerZ - extent, x, 0.0f, centerZ + extent, color);
-                backend->drawLine3D(centerX - extent, 0.0f, z, centerX + extent, 0.0f, z, color);
+                const float coord = offset * gridStep;
+                backend->drawLine3D(coord, 0.0f, -extent, coord, 0.0f, extent, color);
+                backend->drawLine3D(-extent, 0.0f, coord, extent, 0.0f, coord, color);
             }
-            // Keep the world axes fixed at the scene origin while the finer grid
-            // follows the camera in snapped increments to feel effectively infinite.
             backend->drawLine3D(-extent, 0.001f, 0.0f, extent, 0.001f, 0.0f,
                                 zegfx::Color(180, 83, 83, 210));
             backend->drawLine3D(0.0f, 0.001f, -extent, 0.0f, 0.001f, extent,
@@ -913,12 +914,20 @@ bool Graphics::render_realtime_view() {
             }
             backend->pushTransform3D();
             backend->setTransform3D(production_transform(node));
+            const bool isSelected = (selected_node_index_ >= 0 && static_cast<size_t>(selected_node_index_) == item.node_index);
+            const zegfx::Color wireColor = isSelected ? zegfx::Color(245, 166, 35, 255) : zegfx::Color(165, 170, 180, 220);
             for (const auto& edge : item.wire_edges) {
                 backend->drawLine3D(edge.start[0], edge.start[1], edge.start[2],
                                     edge.end[0], edge.end[1], edge.end[2],
-                                    zegfx::Color(190, 194, 202, 225));
+                                    wireColor);
             }
             backend->popTransform3D();
+        }
+
+        // 3D Transform Gizmo & Selection Outline in ZeGFX D3D12 Viewport
+        if (selected_node_index_ >= 0 && static_cast<size_t>(selected_node_index_) < realtime_nodes_.size() &&
+            viewport_shading_mode_ != ViewportShadingMode::PathTracer) {
+            draw_realtime_selection_and_gizmo(backend, realtime_nodes_[selected_node_index_], active_tool_);
         }
     }
     if (realtime_modal_overlay_active_ && realtime_viewport_width_ > 0 && realtime_viewport_height_ > 0) {
@@ -1262,9 +1271,245 @@ zegfx::ProductionRenderProgress Graphics::production_render_progress() const {
     return production_pipeline_ ? production_pipeline_->getProgress() : zegfx::ProductionRenderProgress{};
 }
 
+bool Graphics::update_production_material(uint32_t materialIndex, const zegfx::ProductionMaterial& material) {
+    bool updated = false;
+    if (production_scene_submitted_ && production_pipeline_) {
+        updated = production_pipeline_->updateMaterial(materialIndex, material);
+    }
+    if (realtime_renderer_ && materialIndex < realtime_materials_.size() && realtime_materials_[materialIndex].valid()) {
+        const auto matHandle = realtime_materials_[materialIndex];
+        realtime_renderer_->setMaterialColor(matHandle, "baseColor", material_color(material.baseColor));
+        realtime_renderer_->setMaterialFloat(matHandle, "metallic", std::clamp(material.metallic, 0.0f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "roughness", std::clamp(material.roughness, 0.02f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "transmission", std::clamp(material.transmission, 0.0f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "ior", std::clamp(material.ior, 1.0f, 3.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "coatWeight", std::clamp(material.coatWeight, 0.0f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "coatRoughness", std::clamp(material.coatRoughness, 0.01f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "sheenWeight", std::clamp(material.sheenWeight, 0.0f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "sheenRoughness", std::clamp(material.sheenRoughness, 0.01f, 1.0f));
+        realtime_renderer_->setMaterialFloat(matHandle, "emissiveStrength",
+            std::max({material.emission[0], material.emission[1], material.emission[2], 0.0f}));
+        mark_realtime_history_dirty();
+        updated = true;
+    }
+    return updated;
+}
+
+void Graphics::hide_realtime_viewport() {
+    if (realtime_host_window_ && IsWindowVisible(realtime_host_window_)) {
+        ShowWindow(realtime_host_window_, SW_HIDE);
+    }
+}
+
+bool Graphics::draw_pathtracer_viewport(const Rect& bounds, bool denoiseActive, zegfx::ProductionAOV aov) {
+    hide_realtime_viewport();
+    if (!production_scene_submitted_ || !production_pipeline_ || !d2d_context_ || bounds.width <= 0.0f || bounds.height <= 0.0f) {
+        return false;
+    }
+
+    const auto progress = production_pipeline_->getProgress();
+    if (denoiseActive && aov == zegfx::ProductionAOV::Beauty && progress.currentSample >= 4 && progress.currentSample != last_denoised_sample_) {
+        production_pipeline_->denoise();
+        last_denoised_sample_ = progress.currentSample;
+    }
+
+    auto aovView = production_pipeline_->getAOVView(aov);
+    if (!aovView.data || aovView.width == 0 || aovView.height == 0) {
+        aovView = production_pipeline_->getAOVView(zegfx::ProductionAOV::Beauty);
+    }
+    if (!aovView.data || aovView.width == 0 || aovView.height == 0) {
+        return false;
+    }
+
+    const uint32_t aovW = aovView.width;
+    const uint32_t aovH = aovView.height;
+    const uint32_t channels = (aovView.channels > 0) ? aovView.channels : 4;
+    const size_t pixelCount = static_cast<size_t>(aovW) * aovH;
+
+    if (pathtracer_rgba_buffer_.size() < pixelCount * 4) {
+        pathtracer_rgba_buffer_.resize(pixelCount * 4);
+    }
+
+    const float* src = aovView.data;
+    uint8_t* dst = pathtracer_rgba_buffer_.data();
+
+    auto aces = [](float x) {
+        float a_ = 2.51f, b_ = 0.03f, c_ = 2.43f, d_ = 0.59f, e_ = 0.14f;
+        return std::clamp((x * (a_ * x + b_)) / (x * (c_ * x + d_) + e_), 0.0f, 1.0f);
+    };
+
+    auto toSrgb = [](float v) -> uint8_t {
+        float s = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+        return static_cast<uint8_t>(std::clamp(s * 255.0f + 0.5f, 0.0f, 255.0f));
+    };
+
+    if (aov == zegfx::ProductionAOV::Cryptomatte) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            uint32_t hash = *reinterpret_cast<const uint32_t*>(&src[i * 4 + 0]);
+            float coverage = src[i * 4 + 1];
+            if (hash == 0 || coverage <= 0.0001f) {
+                dst[i * 4 + 0] = 18; // B
+                dst[i * 4 + 1] = 18; // G
+                dst[i * 4 + 2] = 20; // R
+                dst[i * 4 + 3] = 255;
+            } else {
+                float hue = std::fmod(static_cast<float>(hash) * 0.618033988749895f, 1.0f);
+                if (hue < 0.0f) hue += 1.0f;
+                float sat = 0.72f;
+                float val = 0.88f;
+                float h6 = hue * 6.0f;
+                int hi = static_cast<int>(h6) % 6;
+                float f = h6 - static_cast<float>(static_cast<int>(h6));
+                float p = val * (1.0f - sat);
+                float q = val * (1.0f - f * sat);
+                float t = val * (1.0f - (1.0f - f) * sat);
+                float r = 0, g = 0, b = 0;
+                switch (hi) {
+                    case 0: r = val; g = t; b = p; break;
+                    case 1: r = q; g = val; b = p; break;
+                    case 2: r = p; g = val; b = t; break;
+                    case 3: r = p; g = q; b = val; break;
+                    case 4: r = t; g = p; b = val; break;
+                    case 5: r = val; g = p; b = q; break;
+                }
+                dst[i * 4 + 0] = static_cast<uint8_t>(b * 255.0f);
+                dst[i * 4 + 1] = static_cast<uint8_t>(g * 255.0f);
+                dst[i * 4 + 2] = static_cast<uint8_t>(r * 255.0f);
+                dst[i * 4 + 3] = 255;
+            }
+        }
+    } else if (aov == zegfx::ProductionAOV::VarianceMap) {
+        // Cold-to-hot thermal heatmap: Blue -> Cyan -> Green -> Yellow -> Red
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float var = (channels == 1) ? src[i] : src[i * channels];
+            float t = std::clamp(std::sqrt(std::max(0.0f, var)) / 0.12f, 0.0f, 1.0f);
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            if (t < 0.25f) {
+                float f = t / 0.25f;
+                r = 0.05f;
+                g = 0.10f + 0.60f * f;
+                b = 0.60f + 0.35f * f;
+            } else if (t < 0.50f) {
+                float f = (t - 0.25f) / 0.25f;
+                r = 0.05f + 0.15f * f;
+                g = 0.70f + 0.25f * f;
+                b = 0.95f - 0.75f * f;
+            } else if (t < 0.75f) {
+                float f = (t - 0.50f) / 0.25f;
+                r = 0.20f + 0.75f * f;
+                g = 0.95f - 0.10f * f;
+                b = 0.20f - 0.15f * f;
+            } else {
+                float f = (t - 0.75f) / 0.25f;
+                r = 0.95f;
+                g = 0.85f - 0.70f * f;
+                b = 0.05f;
+            }
+            dst[i * 4 + 0] = static_cast<uint8_t>(b * 255.0f);
+            dst[i * 4 + 1] = static_cast<uint8_t>(g * 255.0f);
+            dst[i * 4 + 2] = static_cast<uint8_t>(r * 255.0f);
+            dst[i * 4 + 3] = 255;
+        }
+    } else if (aov == zegfx::ProductionAOV::WorldNormal) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float nx = src[i * 4 + 0];
+            float ny = src[i * 4 + 1];
+            float nz = src[i * 4 + 2];
+            float lenSq = nx * nx + ny * ny + nz * nz;
+            if (lenSq < 0.0001f) {
+                dst[i * 4 + 0] = 0;
+                dst[i * 4 + 1] = 0;
+                dst[i * 4 + 2] = 0;
+            } else {
+                dst[i * 4 + 0] = static_cast<uint8_t>(std::clamp((nz * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f)); // B
+                dst[i * 4 + 1] = static_cast<uint8_t>(std::clamp((ny * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f)); // G
+                dst[i * 4 + 2] = static_cast<uint8_t>(std::clamp((nx * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f)); // R
+            }
+            dst[i * 4 + 3] = 255;
+        }
+    } else if (aov == zegfx::ProductionAOV::LinearDepth) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float depth = (channels == 1) ? src[i] : src[i * channels];
+            float norm = (depth > 0.0001f) ? std::clamp(depth / 35.0f, 0.0f, 1.0f) : 1.0f;
+            uint8_t val = static_cast<uint8_t>(norm * 255.0f);
+            dst[i * 4 + 0] = val;
+            dst[i * 4 + 1] = val;
+            dst[i * 4 + 2] = val;
+            dst[i * 4 + 3] = 255;
+        }
+    } else if (aov == zegfx::ProductionAOV::Roughness) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float rough = (channels == 1) ? src[i] : src[i * channels];
+            uint8_t val = static_cast<uint8_t>(std::clamp(rough, 0.0f, 1.0f) * 255.0f);
+            dst[i * 4 + 0] = val;
+            dst[i * 4 + 1] = val;
+            dst[i * 4 + 2] = val;
+            dst[i * 4 + 3] = 255;
+        }
+    } else if (aov == zegfx::ProductionAOV::Albedo) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float r = std::clamp(src[i * 4 + 0], 0.0f, 1.0f);
+            float g = std::clamp(src[i * 4 + 1], 0.0f, 1.0f);
+            float b = std::clamp(src[i * 4 + 2], 0.0f, 1.0f);
+            float a = (channels >= 4) ? src[i * 4 + 3] : 1.0f;
+            dst[i * 4 + 0] = toSrgb(b);
+            dst[i * 4 + 1] = toSrgb(g);
+            dst[i * 4 + 2] = toSrgb(r);
+            dst[i * 4 + 3] = static_cast<uint8_t>(std::clamp(a * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+    } else {
+        // Beauty, DiffuseDirect, DiffuseIndirect, SpecularDirect, SpecularIndirect, Emission, Transmission
+        for (size_t i = 0; i < pixelCount; ++i) {
+            float r = src[i * 4 + 0];
+            float g = src[i * 4 + 1];
+            float b = src[i * 4 + 2];
+            float a = (channels >= 4) ? src[i * 4 + 3] : 1.0f;
+
+            r = aces(std::max(0.0f, r));
+            g = aces(std::max(0.0f, g));
+            b = aces(std::max(0.0f, b));
+
+            dst[i * 4 + 0] = toSrgb(b);
+            dst[i * 4 + 1] = toSrgb(g);
+            dst[i * 4 + 2] = toSrgb(r);
+            dst[i * 4 + 3] = static_cast<uint8_t>(std::clamp(a * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+    }
+
+    if (!pathtracer_bitmap_ || pathtracer_width_ != aovW || pathtracer_height_ != aovH) {
+        pathtracer_bitmap_.Reset();
+        const auto props = D2D1::BitmapProperties1(
+            D2D1_BITMAP_OPTIONS_NONE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+            96.0f, 96.0f);
+        D2D1_SIZE_U size = D2D1::SizeU(aovW, aovH);
+        HRESULT hr = d2d_context_->CreateBitmap(size, dst, aovW * 4, props, pathtracer_bitmap_.GetAddressOf());
+        if (FAILED(hr)) return false;
+        pathtracer_width_ = aovW;
+        pathtracer_height_ = aovH;
+    } else {
+        D2D1_RECT_U destRect = D2D1::RectU(0, 0, aovW, aovH);
+        pathtracer_bitmap_->CopyFromMemory(&destRect, dst, aovW * 4);
+    }
+
+    D2D1_RECT_F destD2D = D2D1::RectF(bounds.x, bounds.y, bounds.right(), bounds.bottom());
+    d2d_context_->DrawBitmap(pathtracer_bitmap_.Get(), &destD2D, 1.0f,
+                             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    return true;
+}
+
 bool Graphics::draw_realtime_viewport(const Rect& bounds, const Rect* overlayBounds) {
-    if (!realtime_host_window_ || !realtime_view_available_ || bounds.width <= 0.0f || bounds.height <= 0.0f) {
-        if (realtime_host_window_) ShowWindow(realtime_host_window_, SW_HIDE);
+    if (overlayBounds) {
+        return draw_realtime_viewport(bounds, std::vector<Rect>{ *overlayBounds });
+    }
+    return draw_realtime_viewport(bounds, std::vector<Rect>{});
+}
+
+bool Graphics::draw_realtime_viewport(const Rect& bounds, const std::vector<Rect>& overlayBounds) {
+    if (viewport_shading_mode_ == ViewportShadingMode::PathTracer ||
+        !realtime_host_window_ || !realtime_view_available_ || bounds.width <= 0.0f || bounds.height <= 0.0f) {
+        if (realtime_host_window_ && IsWindowVisible(realtime_host_window_))
+            ShowWindow(realtime_host_window_, SW_HIDE);
         return false;
     }
     const int x = static_cast<int>(std::lround(bounds.x * dpi_scale_));
@@ -1283,6 +1528,7 @@ bool Graphics::draw_realtime_viewport(const Rect& bounds, const Rect* overlayBou
         realtime_child_bounds_ = nextBounds;
         realtime_child_bounds_valid_ = true;
         realtime_child_overlay_valid_ = false;
+        realtime_child_overlay_rects_.clear();
     }
     set_realtime_viewport_overlay_bounds(overlayBounds);
     ShowWindow(realtime_host_window_, SW_SHOWNOACTIVATE);
@@ -1290,44 +1536,79 @@ bool Graphics::draw_realtime_viewport(const Rect& bounds, const Rect* overlayBou
 }
 
 void Graphics::set_realtime_viewport_overlay_bounds(const Rect* overlayBounds) {
+    if (overlayBounds) {
+        set_realtime_viewport_overlay_bounds(std::vector<Rect>{ *overlayBounds });
+    } else {
+        set_realtime_viewport_overlay_bounds(std::vector<Rect>{});
+    }
+}
+
+void Graphics::set_realtime_viewport_overlay_bounds(const std::vector<Rect>& overlayBounds) {
     if (!realtime_host_window_ || !realtime_child_bounds_valid_) return;
     const int width = realtime_child_bounds_.right - realtime_child_bounds_.left;
     const int height = realtime_child_bounds_.bottom - realtime_child_bounds_.top;
-    RECT overlay{};
-    bool hasOverlay = false;
-    if (overlayBounds && overlayBounds->width > 0.0f && overlayBounds->height > 0.0f) {
-        overlay.left = static_cast<LONG>(std::lround(
-            (overlayBounds->x - realtime_viewport_logical_bounds_.x) * dpi_scale_));
-        overlay.top = static_cast<LONG>(std::lround(
-            (overlayBounds->y - realtime_viewport_logical_bounds_.y) * dpi_scale_));
-        overlay.right = static_cast<LONG>(std::lround(
-            (overlayBounds->right() - realtime_viewport_logical_bounds_.x) * dpi_scale_));
-        overlay.bottom = static_cast<LONG>(std::lround(
-            (overlayBounds->bottom() - realtime_viewport_logical_bounds_.y) * dpi_scale_));
-        RECT viewportRect{0, 0, width, height};
+    if (width <= 0 || height <= 0) return;
+
+    std::vector<RECT> clippedRects;
+    clippedRects.reserve(overlayBounds.size());
+    RECT viewportRect{0, 0, width, height};
+
+    for (const auto& overlay : overlayBounds) {
+        if (overlay.width <= 0.0f || overlay.height <= 0.0f) continue;
+        const LONG left = static_cast<LONG>(std::floor(
+            (overlay.x - realtime_viewport_logical_bounds_.x) * dpi_scale_));
+        const LONG top = static_cast<LONG>(std::floor(
+            (overlay.y - realtime_viewport_logical_bounds_.y) * dpi_scale_));
+        const LONG right = static_cast<LONG>(std::ceil(
+            (overlay.right() - realtime_viewport_logical_bounds_.x) * dpi_scale_));
+        const LONG bottom = static_cast<LONG>(std::ceil(
+            (overlay.bottom() - realtime_viewport_logical_bounds_.y) * dpi_scale_));
+
+        RECT r{left, top, right, bottom};
         RECT clipped{};
-        hasOverlay = IntersectRect(&clipped, &overlay, &viewportRect) != FALSE;
-        if (hasOverlay) overlay = clipped;
+        if (IntersectRect(&clipped, &r, &viewportRect)) {
+            clippedRects.push_back(clipped);
+        }
     }
-    if (hasOverlay) {
-        if (!realtime_child_overlay_valid_ ||
-            std::memcmp(&overlay, &realtime_child_overlay_bounds_, sizeof(RECT)) != 0) {
-            HRGN viewportRegion = CreateRectRgn(0, 0, width, height);
-            HRGN overlayRegion = CreateRectRgn(overlay.left, overlay.top, overlay.right, overlay.bottom);
-            if (viewportRegion && overlayRegion &&
-                CombineRgn(viewportRegion, viewportRegion, overlayRegion, RGN_DIFF) != ERROR) {
-                if (SetWindowRgn(realtime_host_window_, viewportRegion, TRUE) != 0) {
-                    realtime_child_overlay_bounds_ = overlay;
-                    realtime_child_overlay_valid_ = true;
-                    viewportRegion = nullptr; // ownership transferred to the window
+
+    if (!clippedRects.empty()) {
+        bool unchanged = realtime_child_overlay_valid_ &&
+                         (clippedRects.size() == realtime_child_overlay_rects_.size()) &&
+                         (std::memcmp(clippedRects.data(), realtime_child_overlay_rects_.data(),
+                                      clippedRects.size() * sizeof(RECT)) == 0);
+        if (!unchanged) {
+            HRGN combinedCutout = nullptr;
+            for (const auto& cr : clippedRects) {
+                HRGN itemRgn = CreateRectRgn(cr.left, cr.top, cr.right, cr.bottom);
+                if (itemRgn) {
+                    if (!combinedCutout) {
+                        combinedCutout = itemRgn;
+                    } else {
+                        CombineRgn(combinedCutout, combinedCutout, itemRgn, RGN_OR);
+                        DeleteObject(itemRgn);
+                    }
                 }
             }
-            if (viewportRegion) DeleteObject(viewportRegion);
-            if (overlayRegion) DeleteObject(overlayRegion);
+
+            if (combinedCutout) {
+                HRGN viewportRegion = CreateRectRgn(0, 0, width, height);
+                if (viewportRegion) {
+                    if (CombineRgn(viewportRegion, viewportRegion, combinedCutout, RGN_DIFF) != ERROR) {
+                        if (SetWindowRgn(realtime_host_window_, viewportRegion, TRUE) != 0) {
+                            realtime_child_overlay_rects_ = clippedRects;
+                            realtime_child_overlay_valid_ = true;
+                            viewportRegion = nullptr; // ownership transferred to the window
+                        }
+                    }
+                    if (viewportRegion) DeleteObject(viewportRegion);
+                }
+                DeleteObject(combinedCutout);
+            }
         }
     } else if (realtime_child_overlay_valid_) {
         SetWindowRgn(realtime_host_window_, nullptr, TRUE);
         realtime_child_overlay_valid_ = false;
+        realtime_child_overlay_rects_.clear();
     }
 }
 void Graphics::clear(Color color) {
@@ -1377,7 +1658,19 @@ IDWriteTextFormat* Graphics::get_text_format(const std::string &font_family, flo
         fmt.GetAddressOf()
     );
     if (FAILED(hr)) {
-        // Fallback to standard Segoe UI if specific variable font not present
+        const wchar_t* fallbackFamily = (font_family == "Cascadia Code") ? L"Consolas" : L"Segoe UI Variable Display";
+        hr = dwrite_factory_->CreateTextFormat(
+            fallbackFamily,
+            nullptr,
+            bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            font_size,
+            L"en-us",
+            fmt.GetAddressOf()
+        );
+    }
+    if (FAILED(hr)) {
         hr = dwrite_factory_->CreateTextFormat(
             L"Segoe UI",
             nullptr,
@@ -1584,6 +1877,115 @@ bool Graphics::save_screenshot(const std::string &filepath) {
     CloseHandle(hFile);
     d3d_context_->Unmap(staging_tex.Get(), 0);
     return true;
+}
+
+void Graphics::draw_realtime_selection_and_gizmo(zegfx::GraphicsBackend* backend,
+                                                 const zegfx::ProductionSceneNode& node,
+                                                 const std::string& tool) {
+    if (!backend) return;
+
+    // 1. Selection Bounding Box Outline (Blender DCC vibrant gold)
+    const zegfx::Color selColor(245, 166, 35, 235);
+    backend->pushTransform3D();
+    backend->setTransform3D(production_transform(node));
+    // 12 edges of 1x1x1 unit box around node origin
+    backend->drawLine3D(-0.5f, -0.5f, -0.5f,  0.5f, -0.5f, -0.5f, selColor);
+    backend->drawLine3D( 0.5f, -0.5f, -0.5f,  0.5f,  0.5f, -0.5f, selColor);
+    backend->drawLine3D( 0.5f,  0.5f, -0.5f, -0.5f,  0.5f, -0.5f, selColor);
+    backend->drawLine3D(-0.5f,  0.5f, -0.5f, -0.5f, -0.5f, -0.5f, selColor);
+
+    backend->drawLine3D(-0.5f, -0.5f,  0.5f,  0.5f, -0.5f,  0.5f, selColor);
+    backend->drawLine3D( 0.5f, -0.5f,  0.5f,  0.5f,  0.5f,  0.5f, selColor);
+    backend->drawLine3D( 0.5f,  0.5f,  0.5f, -0.5f,  0.5f,  0.5f, selColor);
+    backend->drawLine3D(-0.5f,  0.5f,  0.5f, -0.5f, -0.5f,  0.5f, selColor);
+
+    backend->drawLine3D(-0.5f, -0.5f, -0.5f, -0.5f, -0.5f,  0.5f, selColor);
+    backend->drawLine3D( 0.5f, -0.5f, -0.5f,  0.5f, -0.5f,  0.5f, selColor);
+    backend->drawLine3D( 0.5f,  0.5f, -0.5f,  0.5f,  0.5f,  0.5f, selColor);
+    backend->drawLine3D(-0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f, selColor);
+    backend->popTransform3D();
+
+    if (tool == "tool_select") return; // Selection tool shows selection bounds only
+
+    // 2. 3D Transform Gizmo at Node Center
+    const float px = node.worldTransform[12];
+    const float py = node.worldTransform[13];
+    const float pz = node.worldTransform[14];
+    const float camDist = std::hypot(px - realtime_view_.cameraPosition[0],
+                                     py - realtime_view_.cameraPosition[1],
+                                     pz - realtime_view_.cameraPosition[2]);
+    const float gizmoLen = std::max(0.35f, camDist * std::tan(realtime_view_.verticalFovDegrees * 0.008726646f) * 0.38f);
+    const float coneSize = gizmoLen * 0.09f;
+    const float coneBase = gizmoLen * 0.80f;
+
+    const zegfx::Color colX(224, 83, 83, 255);
+    const zegfx::Color colY(83, 224, 102, 255);
+    const zegfx::Color colZ(83, 136, 224, 255);
+
+    if (tool == "tool_move") {
+        // X Axis
+        backend->drawLine3D(px, py, pz, px + gizmoLen, py, pz, colX);
+        backend->drawLine3D(px + gizmoLen, py, pz, px + coneBase, py + coneSize, pz, colX);
+        backend->drawLine3D(px + gizmoLen, py, pz, px + coneBase, py - coneSize, pz, colX);
+        backend->drawLine3D(px + gizmoLen, py, pz, px + coneBase, py, pz + coneSize, colX);
+        backend->drawLine3D(px + gizmoLen, py, pz, px + coneBase, py, pz - coneSize, colX);
+
+        // Y Axis
+        backend->drawLine3D(px, py, pz, px, py + gizmoLen, pz, colY);
+        backend->drawLine3D(px, py + gizmoLen, pz, px + coneSize, py + coneBase, pz, colY);
+        backend->drawLine3D(px, py + gizmoLen, pz, px - coneSize, py + coneBase, pz, colY);
+        backend->drawLine3D(px, py + gizmoLen, pz, px, py + coneBase, pz + coneSize, colY);
+        backend->drawLine3D(px, py + gizmoLen, pz, px, py + coneBase, pz - coneSize, colY);
+
+        // Z Axis
+        backend->drawLine3D(px, py, pz, px, py, pz + gizmoLen, colZ);
+        backend->drawLine3D(px, py, pz + gizmoLen, px + coneSize, py, pz + coneBase, colZ);
+        backend->drawLine3D(px, py, pz + gizmoLen, px - coneSize, py, pz + coneBase, colZ);
+        backend->drawLine3D(px, py, pz + gizmoLen, px, py + coneSize, pz + coneBase, colZ);
+        backend->drawLine3D(px, py, pz + gizmoLen, px, py - coneSize, pz + coneBase, colZ);
+
+        // Planar Handles (XY, XZ, YZ)
+        const float planeSize = gizmoLen * 0.32f;
+        const zegfx::Color colXY(224, 210, 83, 230);
+        const zegfx::Color colXZ(83, 224, 210, 230);
+        const zegfx::Color colYZ(224, 83, 210, 230);
+        backend->drawLine3D(px + planeSize, py, pz, px + planeSize, py + planeSize, pz, colXY);
+        backend->drawLine3D(px, py + planeSize, pz, px + planeSize, py + planeSize, pz, colXY);
+
+        backend->drawLine3D(px + planeSize, py, pz, px + planeSize, py, pz + planeSize, colXZ);
+        backend->drawLine3D(px, py, pz + planeSize, px + planeSize, py, pz + planeSize, colXZ);
+
+        backend->drawLine3D(px, py + planeSize, pz, px, py + planeSize, pz + planeSize, colYZ);
+        backend->drawLine3D(px, py, pz + planeSize, px, py + planeSize, pz + planeSize, colYZ);
+    } else if (tool == "tool_rotate") {
+        constexpr int segments = 48;
+        const float radius = gizmoLen * 0.95f;
+        constexpr float step = 6.283185307f / segments;
+        for (int i = 0; i < segments; ++i) {
+            const float a0 = i * step;
+            const float a1 = (i + 1) * step;
+            const float c0 = std::cos(a0) * radius, s0 = std::sin(a0) * radius;
+            const float c1 = std::cos(a1) * radius, s1 = std::sin(a1) * radius;
+            // X ring (YZ plane)
+            backend->drawLine3D(px, py + c0, pz + s0, px, py + c1, pz + s1, colX);
+            // Y ring (XZ plane)
+            backend->drawLine3D(px + c0, py, pz + s0, px + c1, py, pz + s1, colY);
+            // Z ring (XY plane)
+            backend->drawLine3D(px + c0, py + s0, pz, px + c1, py + s1, pz, colZ);
+        }
+    } else if (tool == "tool_scale") {
+        // X Axis
+        backend->drawLine3D(px, py, pz, px + gizmoLen, py, pz, colX);
+        backend->drawCubeWire3D(px + gizmoLen, py, pz, coneSize * 1.5f, colX);
+        // Y Axis
+        backend->drawLine3D(px, py, pz, px, py + gizmoLen, pz, colY);
+        backend->drawCubeWire3D(px, py + gizmoLen, pz, coneSize * 1.5f, colY);
+        // Z Axis
+        backend->drawLine3D(px, py, pz, px, py, pz + gizmoLen, colZ);
+        backend->drawCubeWire3D(px, py, pz + gizmoLen, coneSize * 1.5f, colZ);
+        // Center uniform box
+        backend->drawCubeWire3D(px, py, pz, coneSize * 1.2f, zegfx::Color(220, 220, 225, 230));
+    }
 }
 
 } // namespace medusa

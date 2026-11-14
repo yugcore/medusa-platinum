@@ -20,6 +20,8 @@ public:
     const std::string& get_label() const { return label_; }
     void set_label(const std::string &label) { label_ = label; }
     void set_active(bool active) { is_active_ = active; }
+    bool is_active() const { return is_active_; }
+    bool is_hovered() const { return is_hovered_; }
     void set_flat(bool flat) { is_flat_ = flat; }
     void set_flat_active_fill(bool enabled) { flat_active_fill_ = enabled; }
     void set_primary(bool primary) { is_primary_ = primary; }

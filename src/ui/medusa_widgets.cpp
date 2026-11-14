@@ -17,22 +17,21 @@ void ButtonWidget::draw(Graphics &gfx) {
     Color bg = is_primary_ ? Theme::kAccentBg : Theme::kControlBg;
     if (is_primary_ && is_hovered_) bg = Theme::kAccentHover;
     else if (is_pressed_) bg = Theme::kControlActive;
-    else if (is_active_) bg = Theme::kSelectionBg;
+    else if (is_active_) bg = Theme::kControlActive;
     else if (is_hovered_) bg = Theme::kControlHover;
 
     if (is_primary_) {
-        gfx.fill_rect(bounds_, bg);
-        gfx.draw_rect(bounds_, Theme::kAccentBorder, 1.0f);
+        gfx.fill_rounded_rect(bounds_, 3.0f, bg);
+        gfx.draw_rounded_rect(bounds_, 3.0f, Theme::kAccentBorder, 1.0f);
     } else if (!is_flat_) {
-        gfx.fill_rect(bounds_, bg);
-        gfx.draw_rect(bounds_, is_active_ ? Theme::kAccentBorder : Theme::kBorderSubtle, 1.0f);
-    } else if (is_hovered_ || is_pressed_ || (is_active_ && flat_active_fill_)) {
-        gfx.fill_rect(bounds_, bg);
+        gfx.fill_rounded_rect(bounds_, 3.0f, bg);
+        gfx.draw_rounded_rect(bounds_, 3.0f, is_active_ ? Theme::kAccentBorder : Theme::kBorderBright, 1.0f);
     } else if (is_active_) {
-        // A narrow blue rail marks the active tool without turning the shelf
-        // into a row of rounded toggle cards.
-        gfx.fill_rect(Rect(bounds_.x, bounds_.y + 5.0f, 2.0f,
-                           std::max(0.0f, bounds_.height - 10.0f)), Theme::kAccent);
+        // Active tool pill in Blender style: rounded dark container with subtle outline
+        gfx.fill_rounded_rect(bounds_, 4.0f, Theme::kControlActive);
+        gfx.draw_rounded_rect(bounds_, 4.0f, Theme::kBorderBright, 1.0f);
+    } else if (is_hovered_ || is_pressed_) {
+        gfx.fill_rounded_rect(bounds_, 3.0f, bg);
     }
 
     if (!icon_.empty() && !label_.empty()) {
@@ -106,23 +105,40 @@ ScrubbableNumberWidget::ScrubbableNumberWidget(const std::string &axis_label, fl
 
 void ScrubbableNumberWidget::draw(Graphics &gfx) {
     Color bg = is_dragging_ ? Theme::kControlActive : (is_hovered_ ? Theme::kControlHover : Theme::kControlBg);
-    gfx.fill_rect(bounds_, bg);
-    gfx.draw_rect(bounds_, is_dragging_ ? Theme::kAccentBorder : Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(bounds_, 3.0f, bg);
+    gfx.draw_rounded_rect(bounds_, 3.0f, is_dragging_ ? Theme::kAccentBorder : Theme::kBorderBright, 1.0f);
 
-    // Left Axis Indicator (Pure neutral tag)
-    float tag_w = std::max(20.0f, static_cast<float>(axis_label_.length()) * 7.5f + 8.0f);
-    Rect tag_rect(bounds_.x, bounds_.y, tag_w, bounds_.height);
-    gfx.fill_rect(tag_rect, Color(axis_color_.r, axis_color_.g, axis_color_.b, 0.18f));
+    // If bounded slider, draw a subtle progressive scrub fill bar (Blender style)
+    if (min_val_ < max_val_ && std::isfinite(min_val_) && std::isfinite(max_val_)) {
+        float pct = std::clamp((value_ - min_val_) / (max_val_ - min_val_), 0.0f, 1.0f);
+        if (pct > 0.005f) {
+            Rect fill_rect(bounds_.x + 1.0f, bounds_.y + 1.0f, (bounds_.width - 2.0f) * pct, bounds_.height - 2.0f);
+            gfx.fill_rounded_rect(fill_rect, 2.0f, is_dragging_ ? Color(0.25f, 0.45f, 0.70f, 0.35f) : Color(0.35f, 0.38f, 0.45f, 0.20f));
+        }
+    }
 
-    gfx.draw_text(axis_label_, tag_rect, axis_color_,
-                  Theme::kSmallFont, true, true, true, Theme::kUiFontFamily);
+    // Left Axis / Property Label Indicator
+    float tag_w = 0.0f;
+    if (!axis_label_.empty()) {
+        tag_w = std::max(20.0f, static_cast<float>(axis_label_.length()) * 7.2f + 10.0f);
+        Rect tag_rect(bounds_.x, bounds_.y, tag_w, bounds_.height);
+        Color strip_col = axis_color_;
+        if (strip_col.a < 0.1f) {
+            strip_col = Theme::kTextSecondary;
+            gfx.fill_rounded_rect(tag_rect, 3.0f, Color::from_hex(0x22242B));
+        } else {
+            gfx.fill_rounded_rect(tag_rect, 3.0f, Color(strip_col.r, strip_col.g, strip_col.b, 0.22f));
+        }
+        gfx.draw_text(axis_label_, tag_rect, strip_col,
+                      Theme::kSmallFont, true, true, true, Theme::kUiFontFamily);
+    }
 
     // Formatted Value Display (Neutral white/gray numbers)
     char value_text[64];
     std::snprintf(value_text, sizeof(value_text), "%.3f%s%s", value_,
                   unit_.empty() ? "" : " ", unit_.c_str());
-    Rect val_rect(bounds_.x + tag_w + 6.0f, bounds_.y, bounds_.width - tag_w - 8.0f, bounds_.height);
-    gfx.draw_text(value_text, val_rect, Theme::kTextPrimary, Theme::kUiFont, false, false, true, Theme::kNumericFontFamily);
+    Rect val_rect(bounds_.x + tag_w + 6.0f, bounds_.y, bounds_.width - tag_w - 12.0f, bounds_.height);
+    gfx.draw_text(value_text, val_rect, Theme::kTextPrimary, Theme::kUiFont, false, true, true, Theme::kNumericFontFamily);
 }
 
 bool ScrubbableNumberWidget::handle_mouse_down(const MouseEvent &e) {
@@ -179,12 +195,12 @@ CollapsibleSectionWidget::CollapsibleSectionWidget(const std::string &title, boo
 
 void CollapsibleSectionWidget::draw(Graphics &gfx) {
     Color bg = is_hovered_ ? Theme::kControlHover : Theme::kPanelHeaderBg;
-    gfx.fill_rect(bounds_, bg);
-    gfx.draw_line(Point(bounds_.x, bounds_.bottom()), Point(bounds_.right(), bounds_.bottom()), Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(Rect(bounds_.x + 4.0f, bounds_.y, bounds_.width - 8.0f, bounds_.height), 3.0f, bg);
+    gfx.draw_line(Point(bounds_.x + 4.0f, bounds_.bottom()), Point(bounds_.right() - 4.0f, bounds_.bottom()), Theme::kBorderSubtle, 1.0f);
 
     // Chevron arrow
-    Rect arrow_rect(bounds_.x + 8.0f, bounds_.y, 12.0f, bounds_.height);
-    gfx.draw_text(is_expanded_ ? "▾" : "▸", arrow_rect, Theme::kTextSecondary, 10.5f, false, true, true);
+    Rect arrow_rect(bounds_.x + 8.0f, bounds_.y, 14.0f, bounds_.height);
+    gfx.draw_text(is_expanded_ ? "▾" : "▸", arrow_rect, Theme::kTextSecondary, 11.0f, false, true, true);
 
     // Section Title
     Rect title_rect(bounds_.x + 24.0f, bounds_.y, bounds_.width - 32.0f, bounds_.height);
@@ -233,12 +249,12 @@ OutlinerRowWidget::OutlinerRowWidget(const std::string &name, const std::string 
       on_toggle_render_(std::move(on_toggle_render)) {}
 
 void OutlinerRowWidget::draw(Graphics &gfx) {
-    // Flat row feedback keeps the hierarchy readable in dense DCC lists.
+    // Modern DCC selection pill: inset rounded rect with accent indicator
     if (is_selected_) {
-        gfx.fill_rect(bounds_, Theme::kSelectionBg);
-        gfx.fill_rect(Rect(bounds_.x, bounds_.y + 2.0f, 2.0f, bounds_.height - 4.0f), Theme::kAccent);
+        gfx.fill_rounded_rect(Rect(bounds_.x + 4.0f, bounds_.y + 1.0f, bounds_.width - 8.0f, bounds_.height - 2.0f), 3.0f, Theme::kSelectionBg);
+        gfx.fill_rounded_rect(Rect(bounds_.x + 4.0f, bounds_.y + 3.0f, 2.5f, bounds_.height - 6.0f), 1.0f, Theme::kAccent);
     } else if (is_hovered_) {
-        gfx.fill_rect(bounds_, Theme::kControlHover);
+        gfx.fill_rounded_rect(Rect(bounds_.x + 4.0f, bounds_.y + 1.0f, bounds_.width - 8.0f, bounds_.height - 2.0f), 3.0f, Theme::kControlHover);
     }
 
     float indent_x = bounds_.x + 8.0f + static_cast<float>(indent_level_ * 16);

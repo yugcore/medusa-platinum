@@ -12,7 +12,7 @@ ViewportRegion::ViewportRegion(EditorState &state) : state_(state) {
 }
 
 bool ViewportRegion::accepts_input(Point p) const {
-    return bounds_.contains(p) || popup_open_;
+    return bounds_.contains(p) || (popup_menu_.is_open() && popup_menu_.contains(p));
 }
 
 Rect ViewportRegion::clip_bounds() const {
@@ -29,19 +29,31 @@ void ViewportRegion::layout(const Rect &bounds) {
         button.set_bounds(Rect(mx, header_rect_.y + 2.0f, mw, header_rect_.height - 4.0f));
         mx += mw + 6.0f;
     }
-    const float shadingWidth = std::min(132.0f, std::max(112.0f, header_rect_.width * 0.16f));
-    shading_rect_ = Rect(std::max(mx + 122.0f, header_rect_.right() - shadingWidth - 8.0f),
+    const float shadingWidth = std::min(148.0f, std::max(128.0f, header_rect_.width * 0.16f));
+    const float denoiseWidth = 100.0f;
+    shading_rect_ = Rect(header_rect_.right() - shadingWidth - 8.0f,
                          header_rect_.y + 2.0f, shadingWidth, header_rect_.height - 4.0f);
+    if (state_.viewport_shading == ViewportShadingMode::PathTracer) {
+        const float aovWidth = 138.0f;
+        aov_rect_ = Rect(shading_rect_.x - aovWidth - 6.0f,
+                         header_rect_.y + 2.0f, aovWidth, header_rect_.height - 4.0f);
+        denoise_rect_ = Rect(aov_rect_.x - denoiseWidth - 6.0f,
+                             header_rect_.y + 2.0f, denoiseWidth, header_rect_.height - 4.0f);
+    } else {
+        aov_rect_ = Rect{};
+        denoise_rect_ = Rect(shading_rect_.x - denoiseWidth - 6.0f,
+                             header_rect_.y + 2.0f, denoiseWidth, header_rect_.height - 4.0f);
+    }
     camera_rect_ = Rect(mx + 8.0f, header_rect_.y + 2.0f,
-                        std::max(100.0f, std::min(270.0f, shading_rect_.x - mx - 16.0f)),
+                        std::max(100.0f, std::min(270.0f, denoise_rect_.x - mx - 14.0f)),
                         header_rect_.height - 4.0f);
-    orientation_rect_ = Rect(canvas_rect_.right() - 74.0f, canvas_rect_.y + 6.0f, 64.0f, 64.0f);
+    orientation_gizmo_.set_bounds(Rect(canvas_rect_.right() - 74.0f, canvas_rect_.y + 6.0f, 64.0f, 64.0f));
 }
 
 void ViewportRegion::draw(Graphics &gfx) {
     // 1. Viewport Header Bar (Blender 3D Viewport header style)
     gfx.fill_rect(header_rect_, Theme::kPanelHeaderBg);
-    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kBorderSubtle, 1.0f);
+    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kDockDivider, 1.0f);
 
     // Editor Icon
     const bool shotWorkspace = (state_.active_workspace == "Shot");
@@ -49,14 +61,14 @@ void ViewportRegion::draw(Graphics &gfx) {
     IconRenderer::draw_icon(gfx, shotWorkspace ? "camera_actor" : "view_grid", icon_r, Theme::kTextSecondary);
 
     for (size_t i = 0; i < menu_buttons_.size(); ++i) {
-        menu_buttons_[i].set_active(popup_open_ && active_menu_ == static_cast<int>(i));
+        menu_buttons_[i].set_active(popup_menu_.is_open() && active_menu_ == static_cast<int>(i));
         menu_buttons_[i].draw(gfx);
     }
 
     // Camera Switcher (Aligned dedicated icon + clean label)
-    if (camera_rect_.contains(last_mouse_pos_) || (popup_open_ && active_menu_ == 4)) {
-        gfx.fill_rect(camera_rect_, Theme::kControlHover);
-        gfx.draw_rect(camera_rect_, Theme::kBorderSubtle, 1.0f);
+    if (camera_rect_.contains(last_mouse_pos_) || (popup_menu_.is_open() && active_menu_ == 4)) {
+        gfx.fill_rounded_rect(camera_rect_, 3.0f, Theme::kControlHover);
+        gfx.draw_rounded_rect(camera_rect_, 3.0f, Theme::kBorderBright, 1.0f);
     }
     float cam_icon_sz = 14.0f;
     float cam_x = camera_rect_.x + 8.0f;
@@ -75,11 +87,41 @@ void ViewportRegion::draw(Graphics &gfx) {
                   (cameraPilotActive || shotWorkspace) ? Theme::kAccent : Theme::kTextPrimary,
                   Theme::kUiFont, cameraPilotActive || shotWorkspace, false, true, Theme::kUiFontFamily);
 
-    const bool shadingHovered = shading_rect_.contains(last_mouse_pos_) || (popup_open_ && active_menu_ == 5);
-    if (shadingHovered) gfx.fill_rect(shading_rect_, Theme::kControlHover);
-    gfx.draw_rect(shading_rect_, shadingHovered ? Theme::kBorderBright : Theme::kBorderSubtle, 1.0f);
-    const char* shadingLabel = state_.viewport_shading == ViewportShadingMode::Wireframe ? "Wireframe" :
-        state_.viewport_shading == ViewportShadingMode::Solid ? "Solid" : "Rendered";
+    // Wavelet Denoiser live toggle pill
+    const bool denoiseHovered = denoise_rect_.contains(last_mouse_pos_);
+    const bool denoiseActive = state_.denoiser_enabled;
+    if (denoiseActive) {
+        gfx.fill_rounded_rect(denoise_rect_, 3.0f, denoiseHovered ? Theme::kControlHover : Theme::kControlActive);
+        gfx.draw_rounded_rect(denoise_rect_, 3.0f, Theme::kBorderBright, 1.0f);
+        gfx.draw_text("AI Denoise", Rect(denoise_rect_.x, denoise_rect_.y, denoise_rect_.width, denoise_rect_.height),
+                      Theme::kTextPrimary, Theme::kUiFont, false, true, true, Theme::kUiFontFamily);
+    } else {
+        if (denoiseHovered) gfx.fill_rounded_rect(denoise_rect_, 3.0f, Theme::kControlHover);
+        gfx.draw_rounded_rect(denoise_rect_, 3.0f, Theme::kBorderSubtle, 1.0f);
+        gfx.draw_text("AI Denoise", Rect(denoise_rect_.x, denoise_rect_.y, denoise_rect_.width, denoise_rect_.height),
+                      Theme::kTextMuted, Theme::kUiFont, false, true, true, Theme::kUiFontFamily);
+    }
+
+    // AOV Channel Selector dropdown (PathTracer mode only)
+    if (state_.viewport_shading == ViewportShadingMode::PathTracer && aov_rect_.width > 0.0f) {
+        const bool aovHovered = aov_rect_.contains(last_mouse_pos_) || (popup_menu_.is_open() && active_menu_ == 6);
+        if (aovHovered) gfx.fill_rounded_rect(aov_rect_, 3.0f, Theme::kControlHover);
+        gfx.draw_rounded_rect(aov_rect_, 3.0f, aovHovered ? Theme::kBorderBright : Theme::kBorderSubtle, 1.0f);
+        std::string aovLabel = "Pass: " + state_.active_aov_name + "  ▾";
+        gfx.draw_text(aovLabel,
+                      Rect(aov_rect_.x + 8.0f, aov_rect_.y,
+                           aov_rect_.width - 16.0f, aov_rect_.height),
+                      Theme::kTextPrimary, Theme::kUiFont, false, false, true, Theme::kUiFontFamily);
+    }
+
+    const bool shadingHovered = shading_rect_.contains(last_mouse_pos_) || (popup_menu_.is_open() && active_menu_ == 5);
+    if (shadingHovered) gfx.fill_rounded_rect(shading_rect_, 3.0f, Theme::kControlHover);
+    gfx.draw_rounded_rect(shading_rect_, 3.0f, shadingHovered ? Theme::kBorderBright : Theme::kBorderSubtle, 1.0f);
+    const char* shadingLabel =
+        state_.viewport_shading == ViewportShadingMode::Wireframe ? "Wireframe" :
+        state_.viewport_shading == ViewportShadingMode::Solid ? "Solid (MatCap)" :
+        state_.viewport_shading == ViewportShadingMode::RealTime ? "RealTime (120 FPS)" :
+        "PathTracer";
     gfx.draw_text(std::string(shadingLabel) + "  ▾",
                   Rect(shading_rect_.x + 8.0f, shading_rect_.y,
                        shading_rect_.width - 16.0f, shading_rect_.height),
@@ -88,11 +130,68 @@ void ViewportRegion::draw(Graphics &gfx) {
     // 2. Viewport 3D Canvas
     gfx.fill_rect(canvas_rect_, Theme::kViewportBg);
     gfx.push_clip(canvas_rect_);
-    if (state_.show_grid) {
-        draw_world_grid(gfx);
+
+    if (state_.viewport_shading == ViewportShadingMode::PathTracer) {
+        // Path Tracer Mode: Blit progressive path-traced Beauty or selected AOV pass
+        const bool drawn = gfx.draw_pathtracer_viewport(canvas_rect_, state_.denoiser_enabled, state_.active_aov);
+        if (!drawn) {
+            draw_scene_geometry(gfx);
+        }
+        if (state_.show_grid) {
+            draw_world_grid(gfx);
+        }
+        draw_camera_motion_trail(gfx);
+
+        // Progressive Stats Overlay Pill
+        const auto progress = gfx.production_render_progress();
+        const int convPercent = static_cast<int>(progress.convergenceRate * 100.0f + 0.5f);
+        std::string sppText = "✦ PathTracer: " + std::to_string(progress.currentSample) + " / " +
+                              std::to_string(state_.max_samples_per_pixel) + " spp · Pass: " +
+                              state_.active_aov_name;
+        if (state_.light_tree_enabled) {
+            sppText += " · Light Tree: On";
+        }
+        if (state_.adaptive_sampling_enabled) {
+            sppText += " · " + std::to_string(convPercent) + "% Converged (Welford)";
+        } else if (progress.isConverged) {
+            sppText += " · Converged";
+        }
+        if (state_.denoiser_enabled && progress.currentSample >= 4) {
+            sppText += " · EAW Denoised";
+        }
+        const float badgeW = std::max(200.0f, static_cast<float>(sppText.length()) * 6.5f + 20.0f);
+        Rect badgeRect(canvas_rect_.x + 12.0f, canvas_rect_.bottom() - 32.0f, badgeW, 22.0f);
+        gfx.fill_rounded_rect(badgeRect, 3.0f, Color(0.10f, 0.12f, 0.15f, 0.88f));
+        gfx.draw_rounded_rect(badgeRect, 3.0f, Theme::kBorderSubtle, 1.0f);
+        gfx.draw_text(sppText, badgeRect, progress.isConverged ? Theme::kAccent : Theme::kTextPrimary,
+                      Theme::kSmallFont, false, true, true, Theme::kUiFontFamily);
+    } else {
+        // RealTime, Solid, or Wireframe Mode: 120 FPS ZeGFX D3D12 Rasterizer
+        std::vector<Rect> overlays;
+        overlays.push_back(orientation_gizmo_.get_bounds());
+        if (popup_menu_.is_open() && popup_menu_.get_bounds().width > 0.0f && popup_menu_.get_bounds().height > 0.0f) {
+            overlays.push_back(popup_menu_.get_cutout_bounds());
+        }
+        if (state_.menu_popup_open && state_.active_topbar_popup_rect.width > 0.0f && state_.active_topbar_popup_rect.height > 0.0f) {
+            overlays.push_back(Rect(state_.active_topbar_popup_rect.x - 4.0f,
+                                    state_.active_topbar_popup_rect.y,
+                                    state_.active_topbar_popup_rect.width + 8.0f,
+                                    state_.active_topbar_popup_rect.height + 5.0f));
+        }
+        if (state_.active_modal_rect.width > 0.0f && state_.active_modal_rect.height > 0.0f) {
+            overlays.push_back(state_.active_modal_rect);
+        }
+        if (state_.active_drawer_rect.width > 0.0f && state_.active_drawer_rect.height > 0.0f) {
+            overlays.push_back(state_.active_drawer_rect);
+        }
+        gfx.draw_realtime_viewport(canvas_rect_, overlays);
+        if (state_.show_grid) {
+            draw_world_grid(gfx);
+        }
+        draw_camera_motion_trail(gfx);
+        draw_scene_geometry(gfx);
     }
-    draw_camera_motion_trail(gfx);
-    draw_scene_geometry(gfx);
+
     if (state_.scene_nodes.empty()) draw_empty_scene_label(gfx);
     gfx.pop_clip();
 
@@ -152,55 +251,95 @@ void ViewportRegion::draw(Graphics &gfx) {
         gfx.draw_text(camera_hud, hud_rect, Theme::kTextSecondary, Theme::kSmallFont, false, false, true, Theme::kNumericFontFamily);
     }
     draw_light_markers(gfx);
-    draw_selection_outline(gfx);
-    draw_transform_gizmo(gfx);
-    draw_orientation_gizmo(gfx);
+    const auto proj = [this](const Vec3& w, Point& s) { return project(w, s); };
+    if (state_.viewport_shading != ViewportShadingMode::PathTracer) {
+        transform_gizmo_.draw_selection_outline(gfx, state_, view_basis(), proj);
+        transform_gizmo_.draw(gfx, state_, view_basis(), proj);
+    }
+    orientation_gizmo_.draw(gfx, view_basis());
 
-    draw_popup(gfx);
     for (auto &button : menu_buttons_) button.draw_tooltip(gfx);
 }
 
 bool ViewportRegion::handle_mouse_down(const MouseEvent &e) {
-    if (popup_open_) {
-        for (size_t i = 0; i < popup_items_.size(); ++i) {
-            if (!popup_item_rect(i).contains(e.pos)) continue;
-            if (popup_items_[i].enabled && popup_items_[i].action) popup_items_[i].action();
-            popup_open_ = false;
-            state_.viewport_popup_open = false;
-            active_menu_ = -1;
+    if (popup_menu_.is_open()) {
+        int clicked_menu = -1;
+        for (size_t i = 0; i < menu_buttons_.size(); ++i) {
+            if (menu_buttons_[i].get_bounds().contains(e.pos)) { clicked_menu = static_cast<int>(i); break; }
+        }
+        if (camera_rect_.contains(e.pos)) clicked_menu = 4;
+        else if (shading_rect_.contains(e.pos)) clicked_menu = 5;
+        else if (state_.viewport_shading == ViewportShadingMode::PathTracer && aov_rect_.contains(e.pos)) clicked_menu = 6;
+
+        if (clicked_menu >= 0) {
+            if (active_menu_ == clicked_menu) {
+                popup_menu_.close();
+                state_.viewport_popup_open = false;
+                state_.active_viewport_popup_rect = Rect{};
+                active_menu_ = -1;
+            } else {
+                active_menu_ = clicked_menu;
+                populate_popup(active_menu_);
+                state_.viewport_popup_open = true;
+                state_.active_viewport_popup_rect = popup_menu_.get_bounds();
+            }
             return true;
         }
-        popup_open_ = false;
+
+        if (popup_menu_.contains(e.pos)) {
+            bool handled = popup_menu_.handle_mouse_down(e);
+            state_.viewport_popup_open = popup_menu_.is_open();
+            state_.active_viewport_popup_rect = popup_menu_.get_bounds();
+            if (!popup_menu_.is_open()) active_menu_ = -1;
+            return handled;
+        }
+
+        popup_menu_.close();
         state_.viewport_popup_open = false;
+        state_.active_viewport_popup_rect = Rect{};
         active_menu_ = -1;
         if (!bounds_.contains(e.pos)) return false;
     }
+
     for (size_t i = 0; i < menu_buttons_.size(); ++i) {
         if (!menu_buttons_[i].handle_mouse_down(e)) continue;
         active_menu_ = static_cast<int>(i);
         populate_popup(active_menu_);
-        popup_open_ = true;
         state_.viewport_popup_open = true;
+        state_.active_viewport_popup_rect = popup_menu_.get_bounds();
         return true;
     }
     if (camera_rect_.contains(e.pos) && e.button == MouseButton::Left) {
         active_menu_ = 4;
         populate_popup(active_menu_);
-        popup_open_ = true;
         state_.viewport_popup_open = true;
+        state_.active_viewport_popup_rect = popup_menu_.get_bounds();
+        return true;
+    }
+    if (denoise_rect_.contains(e.pos) && e.button == MouseButton::Left) {
+        state_.denoiser_enabled = !state_.denoiser_enabled;
+        return true;
+    }
+    if (state_.viewport_shading == ViewportShadingMode::PathTracer && aov_rect_.contains(e.pos) && e.button == MouseButton::Left) {
+        active_menu_ = 6;
+        populate_popup(active_menu_);
+        state_.viewport_popup_open = true;
+        state_.active_viewport_popup_rect = popup_menu_.get_bounds();
         return true;
     }
     if (shading_rect_.contains(e.pos) && e.button == MouseButton::Left) {
         active_menu_ = 5;
         populate_popup(active_menu_);
-        popup_open_ = true;
         state_.viewport_popup_open = true;
+        state_.active_viewport_popup_rect = popup_menu_.get_bounds();
         return true;
     }
     if (!canvas_rect_.contains(e.pos)) return false;
-    if (e.button == MouseButton::Left && orientation_rect_.contains(e.pos)) {
+    if (e.button == MouseButton::Left && orientation_gizmo_.contains(e.pos)) {
         if (state_.active_workspace == "Shot") return true;
-        snap_view_to_axis(e.pos);
+        orientation_gizmo_.snap_to_axis(e.pos, state_,
+            [this]() { initialize_view_navigation(); },
+            [this]() { update_view_position_from_orbit(); });
         return true;
     }
     if (e.button == MouseButton::Right && !e.alt) {
@@ -236,8 +375,9 @@ bool ViewportRegion::handle_mouse_down(const MouseEvent &e) {
             state_.select_scene_node(static_cast<uint32_t>(lightNode));
             return true;
         }
-        const int handle = hit_test_gizmo(e.pos);
-        if (handle >= 0 && begin_gizmo_drag(handle, e.pos)) return true;
+        const auto proj = [this](const Vec3& w, Point& s) { return project(w, s); };
+        const int handle = transform_gizmo_.hit_test(e.pos, state_, view_basis(), proj);
+        if (handle >= 0 && transform_gizmo_.begin_drag(handle, e.pos, state_, view_basis())) return true;
         if (state_.active_workspace == "Shot") return true;
         float origin[3], direction[3];
         if (make_pick_ray(e.pos, origin, direction)) {
@@ -252,7 +392,8 @@ bool ViewportRegion::handle_mouse_down(const MouseEvent &e) {
 
 bool ViewportRegion::handle_mouse_move(const MouseEvent &e) {
     last_mouse_pos_ = e.pos;
-    int hovered_menu = shading_rect_.contains(e.pos) ? 5 : camera_rect_.contains(e.pos) ? 4 : -1;
+    int hovered_menu = (state_.viewport_shading == ViewportShadingMode::PathTracer && aov_rect_.contains(e.pos)) ? 6 :
+                       shading_rect_.contains(e.pos) ? 5 : camera_rect_.contains(e.pos) ? 4 : -1;
     bool changed = false;
     for (size_t i = 0; i < menu_buttons_.size(); ++i) {
         if (menu_buttons_[i].handle_mouse_move(e)) changed = true;
@@ -262,20 +403,19 @@ bool ViewportRegion::handle_mouse_move(const MouseEvent &e) {
         update_view_navigation(e.pos);
         return true;
     }
-    if (gizmo_drag_.active) {
-        update_gizmo_drag(e.pos);
+    if (transform_gizmo_.is_dragging()) {
+        const auto proj = [this](const Vec3& w, Point& s) { return project(w, s); };
+        transform_gizmo_.update_drag(e.pos, state_, view_basis(), canvas_rect_.height, proj);
         return true;
     }
-    if (popup_open_) {
+    if (popup_menu_.is_open()) {
         if (hovered_menu >= 0 && hovered_menu != active_menu_) {
             active_menu_ = hovered_menu;
-            populate_popup(active_menu_);
+            populate_popup(active_menu_, /*instant=*/true);
+            state_.active_viewport_popup_rect = popup_menu_.get_bounds();
             changed = true;
-        } else if (hovered_menu < 0 && !popup_rect_.contains(e.pos)) {
-            popup_open_ = false;
-            state_.viewport_popup_open = false;
-            active_menu_ = -1;
-            changed = true;
+        } else {
+            if (popup_menu_.handle_mouse_move(e)) changed = true;
         }
     }
     return changed;
@@ -283,9 +423,9 @@ bool ViewportRegion::handle_mouse_move(const MouseEvent &e) {
 
 bool ViewportRegion::handle_mouse_up(const MouseEvent &e) {
     const bool wasFreeLooking = navigation_drag_ == NavigationDrag::FreeLook;
-    const bool wasDragging = navigation_drag_ != NavigationDrag::None || gizmo_drag_.active;
+    const bool wasDragging = navigation_drag_ != NavigationDrag::None || transform_gizmo_.is_dragging();
     navigation_drag_ = NavigationDrag::None;
-    gizmo_drag_.active = false;
+    transform_gizmo_.end_drag();
     if (wasFreeLooking) state_.free_camera_look_active = false;
     if (wasDragging) return true;
     for (auto &button : menu_buttons_) if (button.handle_mouse_up(e)) return true;
@@ -697,120 +837,6 @@ void ViewportRegion::draw_empty_scene_label(Graphics& gfx) const {
                   Theme::kSmallFont, false, false, true, Theme::kUiFontFamily);
 }
 
-ViewportRegion::Vec3 ViewportRegion::selected_pivot() const {
-    if (state_.camera_selected())
-        return {state_.camera_position[0], state_.camera_position[1], state_.camera_position[2]};
-    if (state_.selected_scene_node >= 0 && static_cast<size_t>(state_.selected_scene_node) < state_.scene_nodes.size()) {
-        const auto& node = state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)];
-        return {node.worldTransform[12], node.worldTransform[13], node.worldTransform[14]};
-    }
-    return {};
-}
-
-bool ViewportRegion::gizmo_available() const {
-    if (state_.selected_scene_node < 0 || static_cast<size_t>(state_.selected_scene_node) >= state_.scene_nodes.size()) return false;
-    if (state_.active_tool != "tool_move" && state_.active_tool != "tool_rotate" &&
-        state_.active_tool != "tool_scale") return false;
-    const auto& node = state_.scene_nodes[static_cast<size_t>(state_.selected_scene_node)];
-    if (node.locked) return false;
-    if (node.type == zegfx::ProductionNodeType::Light)
-        return state_.active_tool == "tool_move" || state_.active_tool == "tool_rotate";
-    if (node.type == zegfx::ProductionNodeType::Camera)
-        return state_.active_tool == "tool_move" || state_.active_tool == "tool_rotate";
-    return node.type == zegfx::ProductionNodeType::Mesh || node.type == zegfx::ProductionNodeType::Group;
-}
-
-float ViewportRegion::point_segment_distance(Point p, Point a, Point b) {
-    const float dx = b.x - a.x, dy = b.y - a.y;
-    const float lengthSquared = dx * dx + dy * dy;
-    const float t = lengthSquared > 1.0e-4f
-        ? std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared, 0.0f, 1.0f) : 0.0f;
-    return std::hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
-}
-
-ViewportRegion::Vec3 ViewportRegion::world_axis(int axis) const {
-    return axis == 0 ? Vec3{1.0f, 0.0f, 0.0f} : axis == 1 ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{0.0f, 0.0f, 1.0f};
-}
-
-void ViewportRegion::draw_axis(Graphics& gfx, Vec3 pivot, int axis, float worldLength) const {
-    Point start, end;
-    if (!project(pivot, start) || !project(pivot + world_axis(axis) * worldLength, end)) return;
-    const Color colors[] = {Theme::kAxisX, Theme::kAxisY, Theme::kAxisZ};
-    gfx.draw_line(start, end, colors[axis], 2.0f);
-    const float angle = std::atan2(end.y - start.y, end.x - start.x);
-    const Point a(end.x - std::cos(angle - 0.48f) * 8.0f, end.y - std::sin(angle - 0.48f) * 8.0f);
-    const Point b(end.x - std::cos(angle + 0.48f) * 8.0f, end.y - std::sin(angle + 0.48f) * 8.0f);
-    gfx.draw_line(end, a, colors[axis], 2.0f);
-    gfx.draw_line(end, b, colors[axis], 2.0f);
-    gfx.draw_text(axis == 0 ? "X" : axis == 1 ? "Y" : "Z",
-                  Rect(end.x - 8.0f, end.y - 20.0f, 16.0f, 16.0f), colors[axis],
-                  Theme::kSmallFont, true, true, true, Theme::kUiFontFamily);
-}
-
-void ViewportRegion::draw_transform_gizmo(Graphics& gfx) const {
-    if (!gizmo_available() || state_.active_tool == "tool_select") return;
-    const Vec3 pivot = selected_pivot();
-    const ViewBasis view = view_basis();
-    const float depth = std::max(0.1f, dot(pivot - view.position, view.forward));
-    const float worldLength = std::max(0.15f, depth * 0.13f);
-    Point center;
-    if (!project(pivot, center)) return;
-    if (state_.active_tool == "tool_rotate") {
-        const Color colors[] = {Theme::kAxisX, Theme::kAxisY, Theme::kAxisZ};
-        for (int axis = 0; axis < 3; ++axis) {
-            const Vec3 u = world_axis((axis + 1) % 3), v = world_axis((axis + 2) % 3);
-            Point previous;
-            bool hasPrevious = false;
-            for (int step = 0; step <= 36; ++step) {
-                const float angle = 6.28318530718f * static_cast<float>(step) / 36.0f;
-                Point current;
-                const Vec3 position = pivot + (u * std::cos(angle) + v * std::sin(angle)) * worldLength;
-                const bool projected = project(position, current);
-                if (projected && hasPrevious)
-                    gfx.draw_line(previous, current, colors[axis], 1.7f);
-                previous = current;
-                hasPrevious = projected;
-            }
-        }
-    } else {
-        for (int axis = 0; axis < 3; ++axis) draw_axis(gfx, pivot, axis, worldLength);
-        if (state_.active_tool == "tool_move") {
-            const int planes[3][2] = {{0, 1}, {0, 2}, {1, 2}};
-            const Color planeColors[] = {Theme::kAxisY, Theme::kAxisZ, Theme::kAxisX};
-            for (int i = 0; i < 3; ++i) {
-                Point a, b;
-                if (!project(pivot + world_axis(planes[i][0]) * worldLength * 0.26f, a) ||
-                    !project(pivot + world_axis(planes[i][1]) * worldLength * 0.26f, b)) continue;
-                const Point c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-                gfx.fill_rounded_rect(Rect(c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f), 2.0f, Color(planeColors[i].r, planeColors[i].g, planeColors[i].b, 0.55f));
-            }
-        }
-    }
-    gfx.fill_rounded_rect(Rect(center.x - 4.0f, center.y - 4.0f, 8.0f, 8.0f), 4.0f, Theme::kTextPrimary);
-}
-
-void ViewportRegion::draw_selection_outline(Graphics& gfx) const {
-    if (state_.selected_scene_node < 0 || static_cast<size_t>(state_.selected_scene_node) >= state_.scene_nodes.size() ||
-        static_cast<size_t>(state_.selected_scene_node) >= state_.scene_node_bounds.size()) return;
-    const size_t index = static_cast<size_t>(state_.selected_scene_node);
-    const auto& node = state_.scene_nodes[index];
-    const auto& bounds = state_.scene_node_bounds[index];
-    if (node.type != zegfx::ProductionNodeType::Mesh || !bounds.valid) return;
-    const Vec3 center{node.worldTransform[12] + bounds.centerOffset[0],
-                      node.worldTransform[13] + bounds.centerOffset[1],
-                      node.worldTransform[14] + bounds.centerOffset[2]};
-    const float radius = std::max(0.05f, bounds.radius * std::max({node.scaleFactor[0], node.scaleFactor[1], node.scaleFactor[2]}));
-    const ViewBasis view = view_basis();
-    Point centerScreen, rightScreen, upScreen;
-    if (!project(center, centerScreen) || !project(center + view.right * radius, rightScreen) ||
-        !project(center + view.up * radius, upScreen)) return;
-    const float halfWidth = std::max(8.0f, std::abs(rightScreen.x - centerScreen.x));
-    const float halfHeight = std::max(8.0f, std::abs(upScreen.y - centerScreen.y));
-    const Rect outline(centerScreen.x - halfWidth, centerScreen.y - halfHeight,
-                       halfWidth * 2.0f, halfHeight * 2.0f);
-    gfx.draw_rect(outline, Color(0.78f, 0.81f, 0.85f, 0.72f), 1.0f);
-}
-
 const char* ViewportRegion::light_icon(const zegfx::ProductionSceneNode& node) {
     if (node.areaLight) return "light_area";
     if (node.lightType == zegfx::LightType::Directional) return "light_directional";
@@ -861,108 +887,6 @@ int ViewportRegion::hit_test_light_marker(Point point) const {
     return hit;
 }
 
-void ViewportRegion::draw_orientation_gizmo(Graphics& gfx) {
-    const Point center(orientation_rect_.x + orientation_rect_.width * 0.5f,
-                       orientation_rect_.y + orientation_rect_.height * 0.5f);
-    // A circular, opaque compass keeps the viewport grid from showing through
-    // while avoiding the old square tile around the orientation control.
-    const Rect compass(center.x - 28.0f, center.y - 28.0f, 56.0f, 56.0f);
-    gfx.fill_rounded_rect(compass, 28.0f, Theme::kPanelBg);
-    gfx.draw_rounded_rect(compass, 28.0f, Color(0.30f, 0.30f, 0.30f, 1.0f), 1.0f);
-    orientation_endpoints_.clear();
-    const ViewBasis view = view_basis();
-    const Color colors[] = {Theme::kAxisX, Theme::kAxisY, Theme::kAxisZ};
-    const char* names[] = {"X", "Y", "Z"};
-    struct AxisEnd { Point point; Vec3 direction; float depth; int axis; int sign; };
-    std::array<AxisEnd, 6> ends{};
-    size_t endCount = 0;
-    for (int axis = 0; axis < 3; ++axis) {
-        const Vec3 direction = world_axis(axis);
-        for (int sign : {-1, 1}) {
-            const Vec3 signedAxis = direction * static_cast<float>(sign);
-            const Point endpoint(center.x + dot(signedAxis, view.right) * 18.0f,
-                                 center.y - dot(signedAxis, view.up) * 18.0f);
-            ends[endCount++] = {endpoint, signedAxis, dot(signedAxis, view.forward), axis, sign};
-        }
-    }
-    std::sort(ends.begin(), ends.end(), [](const AxisEnd& a, const AxisEnd& b) { return a.depth > b.depth; });
-    for (const AxisEnd& end : ends) {
-        const bool front = end.depth < 0.0f;
-        const Color axisColor = front ? colors[end.axis] :
-            Color(colors[end.axis].r * 0.58f, colors[end.axis].g * 0.58f,
-                  colors[end.axis].b * 0.58f, 0.62f);
-        gfx.draw_line(center, end.point, axisColor, front ? 2.2f : 1.4f);
-        const float nodeSize = front ? 9.0f : 7.0f;
-        const Rect node(end.point.x - nodeSize * 0.5f, end.point.y - nodeSize * 0.5f, nodeSize, nodeSize);
-        gfx.fill_rounded_rect(node, nodeSize * 0.5f, axisColor);
-        gfx.draw_rounded_rect(node, nodeSize * 0.5f, Color(0.06f, 0.06f, 0.07f, 0.94f), 1.0f);
-        const float screenX = end.point.x - center.x;
-        const float screenY = end.point.y - center.y;
-        const float screenLength = std::hypot(screenX, screenY);
-        if (end.sign > 0 && screenLength > 5.0f) {
-            const float labelX = center.x + screenX / screenLength * 24.0f;
-            const float labelY = center.y + screenY / screenLength * 24.0f;
-            gfx.draw_text(names[end.axis], Rect(labelX - 6.0f, labelY - 5.0f, 12.0f, 10.0f),
-                          front ? Theme::kTextPrimary : Theme::kTextMuted,
-                          8.5f, true, true, true, Theme::kUiFontFamily);
-        }
-        orientation_endpoints_.push_back({end.point, end.direction});
-    }
-    const Rect centerNode(center.x - 4.0f, center.y - 4.0f, 8.0f, 8.0f);
-    gfx.fill_rounded_rect(centerNode, 4.0f, Color(0.68f, 0.70f, 0.73f, 1.0f));
-    gfx.draw_rounded_rect(centerNode, 4.0f, Color(0.05f, 0.05f, 0.06f, 1.0f), 1.0f);
-}
-
-int ViewportRegion::hit_test_gizmo(Point point) const {
-    if (!gizmo_available() || state_.active_tool == "tool_select") return -1;
-    const Vec3 pivot = selected_pivot();
-    const ViewBasis view = view_basis();
-    const float depth = std::max(0.1f, dot(pivot - view.position, view.forward));
-    const float worldLength = std::max(0.15f, depth * 0.13f);
-    Point center;
-    if (!project(pivot, center)) return -1;
-    if (state_.active_tool == "tool_rotate") {
-        int bestAxis = -1;
-        float bestDistance = 10.0f;
-        for (int axis = 0; axis < 3; ++axis) {
-            const Vec3 u = world_axis((axis + 1) % 3), v = world_axis((axis + 2) % 3);
-            Point previous;
-            bool hasPrevious = false;
-            for (int step = 0; step <= 36; ++step) {
-                const float angle = 6.28318530718f * static_cast<float>(step) / 36.0f;
-                Point current;
-                const Vec3 position = pivot + (u * std::cos(angle) + v * std::sin(angle)) * worldLength;
-                const bool projected = project(position, current);
-                if (projected && hasPrevious) {
-                    const float distance = point_segment_distance(point, previous, current);
-                    if (distance < bestDistance) { bestDistance = distance; bestAxis = axis; }
-                }
-                previous = current;
-                hasPrevious = projected;
-            }
-        }
-        return bestAxis;
-    }
-    if (state_.active_tool == "tool_scale" && std::hypot(point.x - center.x, point.y - center.y) <= 9.0f) return 6;
-    if (state_.active_tool == "tool_move") {
-        const int planes[3][2] = {{0, 1}, {0, 2}, {1, 2}};
-        for (int i = 0; i < 3; ++i) {
-            Point a, b;
-            if (project(pivot + world_axis(planes[i][0]) * worldLength * 0.26f, a) &&
-                project(pivot + world_axis(planes[i][1]) * worldLength * 0.26f, b)) {
-                const float cx = (a.x + b.x) * 0.5f, cy = (a.y + b.y) * 0.5f;
-                if (std::abs(point.x - cx) <= 8.0f && std::abs(point.y - cy) <= 8.0f) return 3 + i;
-            }
-        }
-    }
-    for (int axis = 0; axis < 3; ++axis) {
-        Point end;
-        if (project(pivot + world_axis(axis) * worldLength, end) && point_segment_distance(point, center, end) <= 8.0f)
-            return axis;
-    }
-    return -1;
-}
-
 bool ViewportRegion::make_pick_ray(Point point, float origin[3], float direction[3]) const {
     const ViewBasis view = view_basis();
     if (canvas_rect_.height <= 1.0f) return false;
@@ -997,13 +921,13 @@ void ViewportRegion::update_view_position_from_orbit() {
 void ViewportRegion::apply_free_look_delta(float deltaX, float deltaY) {
     constexpr float degreesPerMouseCount = 0.15f;
     if (state_.active_workspace == "Shot") {
-        state_.camera_rotation[1] += deltaX * degreesPerMouseCount;
+        state_.camera_rotation[1] -= deltaX * degreesPerMouseCount;
         state_.camera_rotation[0] = std::clamp(
             state_.camera_rotation[0] - deltaY * degreesPerMouseCount, -89.0f, 89.0f);
         state_.update_camera_pose_fields();
         return;
     }
-    state_.viewport_rotation[1] += deltaX * degreesPerMouseCount;
+    state_.viewport_rotation[1] -= deltaX * degreesPerMouseCount;
     state_.viewport_rotation[0] = std::clamp(
         state_.viewport_rotation[0] - deltaY * degreesPerMouseCount, -89.0f, 89.0f);
     const float pitch = state_.viewport_rotation[0] * 0.017453292519943295f;
@@ -1022,7 +946,7 @@ void ViewportRegion::update_view_navigation(Point point) {
     const ViewBasis view = view_basis();
     if (state_.active_workspace == "Shot") {
         if (navigation_drag_ == NavigationDrag::Orbit) {
-            state_.camera_rotation[1] += dx * 0.35f;
+            state_.camera_rotation[1] -= dx * 0.35f;
             state_.camera_rotation[0] = std::clamp(state_.camera_rotation[0] + dy * 0.35f, -89.0f, 89.0f);
             state_.update_camera_position_from_orbit();
         } else if (navigation_drag_ == NavigationDrag::FreeLook) {
@@ -1046,7 +970,7 @@ void ViewportRegion::update_view_navigation(Point point) {
         return;
     }
     if (navigation_drag_ == NavigationDrag::Orbit) {
-        state_.viewport_rotation[1] += dx * 0.35f;
+        state_.viewport_rotation[1] -= dx * 0.35f;
         state_.viewport_rotation[0] = std::clamp(state_.viewport_rotation[0] + dy * 0.35f, -89.0f, 89.0f);
     } else if (navigation_drag_ == NavigationDrag::FreeLook) {
         apply_free_look_delta(dx * (0.25f / 0.15f), dy * (0.25f / 0.15f));
@@ -1063,124 +987,6 @@ void ViewportRegion::update_view_navigation(Point point) {
     }
     last_drag_ = point;
     if (navigation_drag_ != NavigationDrag::FreeLook) update_view_position_from_orbit();
-}
-
-bool ViewportRegion::begin_gizmo_drag(int handle, Point point) {
-    if (!gizmo_available()) return false;
-    gizmo_drag_ = {};
-    gizmo_drag_.active = true;
-    gizmo_drag_.handle = handle;
-    gizmo_drag_.node = state_.selected_scene_node;
-    gizmo_drag_.pivot = selected_pivot();
-    const auto& node = state_.scene_nodes[static_cast<size_t>(gizmo_drag_.node)];
-    for (int axis = 0; axis < 3; ++axis) {
-        gizmo_drag_.position[axis] = state_.camera_selected() ? state_.camera_position[axis] :
-            node.worldTransform[12 + axis];
-        gizmo_drag_.rotation[axis] = state_.camera_selected() ? state_.camera_rotation[axis] : node.rotationOffset[axis];
-        gizmo_drag_.scale[axis] = node.scaleFactor[axis];
-    }
-    drag_start_ = point;
-    return true;
-}
-
-void ViewportRegion::update_gizmo_drag(Point point) {
-    const int handle = gizmo_drag_.handle;
-    const int nodeIndex = gizmo_drag_.node;
-    if (!gizmo_drag_.active || nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= state_.scene_nodes.size()) return;
-    const float dx = point.x - drag_start_.x, dy = point.y - drag_start_.y;
-    float position[3] = {gizmo_drag_.position[0], gizmo_drag_.position[1], gizmo_drag_.position[2]};
-    float rotation[3] = {gizmo_drag_.rotation[0], gizmo_drag_.rotation[1], gizmo_drag_.rotation[2]};
-    float scale[3] = {gizmo_drag_.scale[0], gizmo_drag_.scale[1], gizmo_drag_.scale[2]};
-    const ViewBasis view = view_basis();
-    const Vec3 pivot = gizmo_drag_.pivot;
-    const float unitsPerPixel = 2.0f * std::max(0.1f, state_.viewport_navigation_active
-        ? state_.viewport_distance : state_.focus_distance) * std::tan(view.verticalFov * 0.5f) /
-        std::max(1.0f, canvas_rect_.height);
-    auto snapped = [this](float value) { return state_.snap_enabled ? std::round(value * 10.0f) * 0.1f : value; };
-    if (state_.active_tool == "tool_move") {
-        Vec3 delta{};
-        if (handle <= 2) {
-            Point center, endpoint;
-            const float worldLength = std::max(0.15f, (state_.viewport_navigation_active ? state_.viewport_distance : state_.focus_distance) * 0.13f);
-            if (project(pivot, center) && project(pivot + world_axis(handle) * worldLength, endpoint)) {
-                const float sx = endpoint.x - center.x, sy = endpoint.y - center.y;
-                const float pixels = std::hypot(sx, sy);
-                const float along = pixels > 0.01f ? (dx * sx + dy * sy) / pixels : -dy;
-                const float amount = along * worldLength / std::max(1.0f, pixels);
-                delta = world_axis(handle) * amount;
-            }
-        } else {
-            const int planes[3][2] = {{0, 1}, {0, 2}, {1, 2}};
-            const int planeIndex = std::clamp(handle - 3, 0, 2);
-            Vec3 movement = view.right * (dx * unitsPerPixel) + view.up * (-dy * unitsPerPixel);
-            const int a = planes[planeIndex][0], b = planes[planeIndex][1];
-            if (a != 0) movement.x = 0.0f;
-            if (a != 1 && b != 1) movement.y = 0.0f;
-            if (b != 2) movement.z = 0.0f;
-            delta = movement;
-        }
-        position[0] = snapped(position[0] + delta.x);
-        position[1] = snapped(position[1] + delta.y);
-        position[2] = snapped(position[2] + delta.z);
-    } else if (state_.active_tool == "tool_rotate") {
-        const int axis = handle == 0 ? 0 : handle == 1 ? 1 : 2;
-        float amount = (dx - dy) * 0.55f;
-        if (state_.snap_enabled) amount = std::round(amount / 15.0f) * 15.0f;
-        rotation[axis] += amount;
-    } else if (state_.active_tool == "tool_scale") {
-        const float factor = std::exp((dx - dy) * 0.008f);
-        if (handle == 6) {
-            for (int axis = 0; axis < 3; ++axis)
-                scale[axis] = std::clamp(gizmo_drag_.scale[axis] * factor, 0.001f, 1000.0f);
-        } else {
-            const int axis = std::clamp(handle, 0, 2);
-            scale[axis] = std::clamp(gizmo_drag_.scale[axis] * factor, 0.001f, 1000.0f);
-        }
-        if (state_.snap_enabled) {
-            for (float& value : scale) value = std::clamp(std::round(value * 10.0f) * 0.1f, 0.001f, 1000.0f);
-        }
-    }
-
-    const auto type = state_.scene_nodes[static_cast<size_t>(nodeIndex)].type;
-    if (type == zegfx::ProductionNodeType::Camera) {
-        for (int axis = 0; axis < 3; ++axis) {
-            state_.camera_position[axis] = position[axis];
-            state_.camera_rotation[axis] = rotation[axis];
-            state_.scene_nodes[static_cast<size_t>(nodeIndex)].worldTransform[12 + axis] = position[axis];
-        }
-        state_.pos_x = position[0]; state_.pos_y = position[1]; state_.pos_z = position[2];
-        state_.rot_x = rotation[0]; state_.rot_y = rotation[1]; state_.rot_z = rotation[2];
-        state_.update_camera_orbit_target();
-        state_.record_keyframe_if_enabled();
-    } else if (type == zegfx::ProductionNodeType::Light) {
-        if (state_.active_tool == "tool_move") {
-            state_.key_light_x = position[0]; state_.key_light_y = position[1]; state_.key_light_z = position[2];
-            state_.set_scene_node_translation(static_cast<uint32_t>(nodeIndex), position);
-        } else {
-            state_.set_scene_node_rotation_scale(static_cast<uint32_t>(nodeIndex), rotation, scale);
-        }
-        state_.record_keyframe_if_enabled();
-    } else {
-        state_.pos_x = position[0]; state_.pos_y = position[1]; state_.pos_z = position[2];
-        state_.rot_x = rotation[0]; state_.rot_y = rotation[1]; state_.rot_z = rotation[2];
-        state_.scale_x = scale[0]; state_.scale_y = scale[1]; state_.scale_z = scale[2];
-        if (state_.active_tool == "tool_move") state_.set_scene_node_translation(static_cast<uint32_t>(nodeIndex), position);
-        else state_.set_scene_node_rotation_scale(static_cast<uint32_t>(nodeIndex), rotation, scale);
-    }
-}
-
-void ViewportRegion::snap_view_to_axis(Point point) {
-    if (orientation_endpoints_.empty()) return;
-    auto closest = std::min_element(orientation_endpoints_.begin(), orientation_endpoints_.end(), [point](const auto& a, const auto& b) {
-        return std::hypot(point.x - a.first.x, point.y - a.first.y) < std::hypot(point.x - b.first.x, point.y - b.first.y);
-    });
-    if (closest == orientation_endpoints_.end() || std::hypot(point.x - closest->first.x, point.y - closest->first.y) > 12.0f) return;
-    initialize_view_navigation();
-    state_.viewport_navigation_active = true;
-    const Vec3 forward = closest->second * -1.0f;
-    state_.viewport_rotation[0] = std::asin(std::clamp(forward.y, -1.0f, 1.0f)) * 57.2957795f;
-    state_.viewport_rotation[1] = std::atan2(forward.x, -forward.z) * 57.2957795f;
-    update_view_position_from_orbit();
 }
 
 void ViewportRegion::init_menus() {
@@ -1200,115 +1006,155 @@ void ViewportRegion::init_menus() {
     }
 }
 
-Rect ViewportRegion::popup_item_rect(size_t index) const {
-    constexpr float item_height = 28.0f;
-    return Rect(popup_rect_.x, popup_rect_.y + 4.0f + static_cast<float>(index) * item_height,
-                popup_rect_.width, item_height);
-}
-
-void ViewportRegion::populate_popup(int menu) {
-    popup_items_.clear();
-    auto add = [this](const char* label, const char* icon, bool enabled,
-                      std::function<void()> action = {}, bool separator = false) {
-        popup_items_.push_back({label, icon, enabled, separator, std::move(action)});
-    };
+void ViewportRegion::populate_popup(int menu, bool instant) {
+    popup_menu_.clear();
     switch (menu) {
         case 0:
-            add("Show Ground Grid", "view_grid", true, [this]() { state_.show_grid = !state_.show_grid; });
-            add("Show Safe Frame", "camera_safe_frame", true, [this]() { state_.show_safe_frame = !state_.show_safe_frame; });
-            add("Rendered Preview", "action_render", true, [this]() { state_.pending_command = "render"; });
+            popup_menu_.add_item("Frame Selected", "camera_actor", "Numpad .", [this]() {
+                state_.pending_command = "frame_selected";
+            });
+            popup_menu_.add_item("Frame All", "view_grid", "Home", [this]() {
+                state_.pending_command = "frame_all";
+            });
+            popup_menu_.add_separator();
+            popup_menu_.add_check("Show Ground Grid", "view_grid", state_.show_grid, [this]() {
+                state_.show_grid = !state_.show_grid;
+            });
+            popup_menu_.add_check("Show Safe Frame", "camera_safe_frame", state_.show_safe_frame, [this]() {
+                state_.show_safe_frame = !state_.show_safe_frame;
+            });
+            popup_menu_.add_check("Show Camera Trail", "camera_actor", state_.show_camera_trail, [this]() {
+                state_.show_camera_trail = !state_.show_camera_trail;
+            });
+            popup_menu_.add_separator();
+            popup_menu_.add_item("Rendered Preview", "action_render", "F12", [this]() {
+                state_.pending_command = "render";
+            });
             break;
         case 1:
+            popup_menu_.add_item("Select All", "", "Ctrl+A", [this]() {
+                if (!state_.scene_nodes.empty()) state_.select_scene_node(0);
+            });
+            popup_menu_.add_item("Deselect All", "", "Alt+A", [this]() {
+                state_.selected_scene_node = -1;
+            });
+            popup_menu_.add_separator("SCENE OBJECTS");
             for (size_t i = 0; i < state_.scene_nodes.size(); ++i) {
                 const auto type = state_.scene_nodes[i].type;
                 const char* icon = type == zegfx::ProductionNodeType::Camera ? "camera_actor" :
                     type == zegfx::ProductionNodeType::Light ? "light_directional" :
                     type == zegfx::ProductionNodeType::Mesh ? "outliner_mesh" : "outliner_collection";
-                add(state_.scene_nodes[i].name.c_str(), icon, true, [this, i]() {
+                const char* type_str = type == zegfx::ProductionNodeType::Camera ? "Camera" :
+                    type == zegfx::ProductionNodeType::Light ? "Light" :
+                    type == zegfx::ProductionNodeType::Mesh ? "Mesh" : "Volume";
+                const bool is_sel = (state_.selected_scene_node == static_cast<int>(i));
+                popup_menu_.add_check(state_.scene_nodes[i].name, icon, is_sel, [this, i]() {
                     state_.select_scene_node(static_cast<uint32_t>(i));
-                });
+                }, type_str);
+            }
+            if (state_.scene_nodes.empty()) {
+                popup_menu_.add_item("No Scene Objects", "", "", nullptr, false);
             }
             break;
         case 2:
-            add("Shapes", "", false, {}, true);
-            add("Plane", "outliner_mesh", true, [this]() { state_.pending_command = "add_primitive_plane"; });
-            add("Cube", "outliner_mesh", true, [this]() { state_.pending_command = "add_primitive_cube"; });
-            add("Circle", "outliner_mesh", true, [this]() { state_.pending_command = "add_primitive_circle"; });
-            add("Cylinder", "outliner_mesh", true, [this]() { state_.pending_command = "add_primitive_cylinder"; });
-            add("Lights", "", false, {}, true);
-            add("Point Light", "light_point", true, [this]() { state_.pending_command = "add_light_point"; });
-            add("Sun Light", "light_directional", true, [this]() { state_.pending_command = "add_light_sun"; });
-            add("Spot Light", "light_spot", true, [this]() { state_.pending_command = "add_light_spot"; });
-            add("Area Light", "light_area", true, [this]() { state_.pending_command = "add_light_area"; });
-            add("Camera", "camera_actor", true, [this]() { state_.pending_command = "add_camera"; }, true);
-            add("Volume", "outliner_collection", true, [this]() { state_.pending_command = "add_volume"; }, true);
+            popup_menu_.add_separator("MESH OBJECTS");
+            popup_menu_.add_item("Plane", "outliner_mesh", "Shift+A", [this]() { state_.pending_command = "add_primitive_plane"; });
+            popup_menu_.add_item("Cube", "outliner_mesh", "", [this]() { state_.pending_command = "add_primitive_cube"; });
+            popup_menu_.add_item("Circle", "outliner_mesh", "", [this]() { state_.pending_command = "add_primitive_circle"; });
+            popup_menu_.add_item("Cylinder", "outliner_mesh", "", [this]() { state_.pending_command = "add_primitive_cylinder"; });
+            popup_menu_.add_separator("LIGHTS");
+            popup_menu_.add_item("Point Light", "light_point", "", [this]() { state_.pending_command = "add_light_point"; });
+            popup_menu_.add_item("Sun Light", "light_directional", "", [this]() { state_.pending_command = "add_light_sun"; });
+            popup_menu_.add_item("Spot Light", "light_spot", "", [this]() { state_.pending_command = "add_light_spot"; });
+            popup_menu_.add_item("Area Light", "light_area", "", [this]() { state_.pending_command = "add_light_area"; });
+            popup_menu_.add_separator("CAMERA & VOLUME");
+            popup_menu_.add_item("Camera", "camera_actor", "", [this]() { state_.pending_command = "add_camera"; });
+            popup_menu_.add_item("Volume", "outliner_collection", "", [this]() { state_.pending_command = "add_volume"; });
             break;
         case 3:
-            add("Select Tool", "tool_select", true, [this]() { state_.active_tool = "tool_select"; });
-            add("Move", "tool_move", true, [this]() { state_.active_tool = "tool_move"; });
-            add("Rotate", "tool_rotate", true, [this]() { state_.active_tool = "tool_rotate"; });
-            add("Scale", "tool_scale", true, [this]() { state_.active_tool = "tool_scale"; });
+            popup_menu_.add_item("Select Tool", "tool_select", "Q", [this]() { state_.active_tool = "tool_select"; });
+            popup_menu_.add_item("Move Tool", "tool_move", "W", [this]() { state_.active_tool = "tool_move"; });
+            popup_menu_.add_item("Rotate Tool", "tool_rotate", "E", [this]() { state_.active_tool = "tool_rotate"; });
+            popup_menu_.add_item("Scale Tool", "tool_scale", "R", [this]() { state_.active_tool = "tool_scale"; });
+            popup_menu_.add_separator();
+            popup_menu_.add_item("Duplicate", "", "Shift+D", [this]() { state_.pending_command = "duplicate"; });
+            popup_menu_.add_item("Delete", "", "Del", [this]() { state_.pending_command = "delete_selected"; });
             break;
         case 4:
-            add("User Perspective", "view_grid", state_.active_workspace == "Scene", [this]() {
+            popup_menu_.add_check("User Perspective", "view_grid", state_.active_workspace == "Scene", [this]() {
                 state_.activate_workspace("Scene");
-            });
+            }, "Numpad 5");
+            popup_menu_.add_separator("SCENE CAMERAS");
             for (size_t i = 0; i < state_.scene_nodes.size(); ++i) {
                 if (state_.scene_nodes[i].type != zegfx::ProductionNodeType::Camera) continue;
-                add(state_.scene_nodes[i].name.c_str(), "camera_actor", true, [this, i]() {
+                popup_menu_.add_check(state_.scene_nodes[i].name, "camera_actor",
+                                      state_.active_camera_node == static_cast<int>(i), [this, i]() {
                     if (i >= state_.scene_nodes.size()) return;
                     state_.active_camera_node = static_cast<int>(i);
                     state_.select_active_camera();
                 });
             }
-            if (state_.active_camera_node >= 0 && static_cast<size_t>(state_.active_camera_node) < state_.scene_nodes.size())
-                add("Camera Properties", "camera_aperture", true, [this]() {
+            if (state_.active_camera_node >= 0 && static_cast<size_t>(state_.active_camera_node) < state_.scene_nodes.size()) {
+                popup_menu_.add_separator();
+                popup_menu_.add_item("Camera Properties", "camera_aperture", "", [this]() {
                     state_.select_active_camera();
                 });
+            }
             break;
-        case 5: {
-            const char* wireframeLabel = state_.viewport_shading == ViewportShadingMode::Wireframe
-                ? "Wireframe  ✓" : "Wireframe";
-            const char* solidLabel = state_.viewport_shading == ViewportShadingMode::Solid
-                ? "Solid  ✓" : "Solid";
-            const char* renderedLabel = state_.viewport_shading == ViewportShadingMode::Rendered
-                ? "Rendered  ✓" : "Rendered";
-            add(wireframeLabel, "", true, [this]() {
+        case 5:
+            popup_menu_.add_check("Wireframe", "", state_.viewport_shading == ViewportShadingMode::Wireframe, [this]() {
                 state_.viewport_shading = ViewportShadingMode::Wireframe;
-            });
-            add(solidLabel, "", true, [this]() {
+            }, "Shift+Z");
+            popup_menu_.add_check("Solid (MatCap)", "", state_.viewport_shading == ViewportShadingMode::Solid, [this]() {
                 state_.viewport_shading = ViewportShadingMode::Solid;
+            }, "Alt+Z");
+            popup_menu_.add_check("RealTime (120 FPS ZeGFX)", "", state_.viewport_shading == ViewportShadingMode::RealTime, [this]() {
+                state_.viewport_shading = ViewportShadingMode::RealTime;
             });
-            add(renderedLabel, "", true, [this]() {
-                state_.viewport_shading = ViewportShadingMode::Rendered;
-            });
+            popup_menu_.add_check("PathTracer (Progressive)", "", state_.viewport_shading == ViewportShadingMode::PathTracer, [this]() {
+                state_.viewport_shading = ViewportShadingMode::PathTracer;
+            }, "Z");
+            break;
+        case 6: {
+            struct AOVOption {
+                zegfx::ProductionAOV aov;
+                const char* name;
+            };
+            const AOVOption options[] = {
+                { zegfx::ProductionAOV::Beauty, "Beauty" },
+                { zegfx::ProductionAOV::Albedo, "Albedo" },
+                { zegfx::ProductionAOV::WorldNormal, "World Normal" },
+                { zegfx::ProductionAOV::LinearDepth, "Linear Depth" },
+                { zegfx::ProductionAOV::DiffuseDirect, "Diffuse Direct" },
+                { zegfx::ProductionAOV::DiffuseIndirect, "Diffuse Indirect" },
+                { zegfx::ProductionAOV::SpecularDirect, "Specular Direct" },
+                { zegfx::ProductionAOV::SpecularIndirect, "Specular Indirect" },
+                { zegfx::ProductionAOV::Emission, "Emission" },
+                { zegfx::ProductionAOV::Roughness, "Roughness" },
+                { zegfx::ProductionAOV::Cryptomatte, "Cryptomatte (ID)" },
+                { zegfx::ProductionAOV::VarianceMap, "Variance Heatmap" },
+            };
+            popup_menu_.add_separator("RENDER PASSES");
+            for (const auto& opt : options) {
+                popup_menu_.add_check(opt.name, "", state_.active_aov == opt.aov, [this, opt]() {
+                    state_.active_aov = opt.aov;
+                    state_.active_aov_name = opt.name;
+                });
+            }
             break;
         }
     }
     Rect anchor = active_menu_ < 4 ? menu_buttons_[static_cast<size_t>(active_menu_)].get_bounds() :
-        active_menu_ == 5 ? shading_rect_ : camera_rect_;
-    const float width = 210.0f;
-    popup_rect_ = Rect(std::clamp(anchor.x, bounds_.x + 4.0f, std::max(bounds_.x + 4.0f, bounds_.right() - width - 4.0f)),
-                       header_rect_.bottom() - 4.0f, width, static_cast<float>(popup_items_.size()) * 28.0f + 8.0f);
+        active_menu_ == 5 ? shading_rect_ :
+        active_menu_ == 6 ? aov_rect_ : camera_rect_;
+    float width = (active_menu_ == 5) ? 230.0f : (active_menu_ == 6) ? 210.0f : (active_menu_ == 2) ? 210.0f : 210.0f;
+    Rect screen_bounds(0.0f, 0.0f, 4000.0f, 3000.0f);
+    popup_menu_.open(anchor, screen_bounds, width, 340.0f, instant);
+    state_.active_viewport_popup_rect = popup_menu_.get_bounds();
 }
 
 void ViewportRegion::draw_popup(Graphics &gfx) {
-    if (!popup_open_) return;
-    gfx.fill_rect(popup_rect_, Theme::kPanelBg);
-    gfx.draw_rect(popup_rect_, Theme::kBorderBright, 1.0f);
-    for (size_t i = 0; i < popup_items_.size(); ++i) {
-        Rect row = popup_item_rect(i);
-        if (popup_items_[i].separator_before)
-            gfx.draw_line(Point(row.x + 8.0f, row.y + 1.0f), Point(row.right() - 8.0f, row.y + 1.0f),
-                          Theme::kBorderSubtle, 1.0f);
-        if (row.contains(last_mouse_pos_)) gfx.fill_rect(row, Theme::kControlHover);
-        if (!popup_items_[i].icon.empty())
-            IconRenderer::draw_icon(gfx, popup_items_[i].icon, Rect(row.x + 8.0f, row.y + 6.0f, 16.0f, 16.0f),
-                                    popup_items_[i].enabled ? Theme::kTextSecondary : Theme::kTextMuted);
-        gfx.draw_text(popup_items_[i].label, Rect(row.x + 32.0f, row.y, row.width - 40.0f, row.height),
-                      popup_items_[i].enabled ? Theme::kTextPrimary : Theme::kTextMuted,
-                      Theme::kUiFont, false, false, true, Theme::kUiFontFamily);
-    }
+    popup_menu_.draw(gfx);
 }
 
 } // namespace medusa

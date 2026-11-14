@@ -34,7 +34,9 @@ RenderSetupDialog::RenderSetupDialog(EditorState& state)
                    state_.max_samples_per_pixel = std::clamp(static_cast<int>(std::round(value)), 1, 4096);
                }),
       firefly_("Clamp", state.firefly_clamp, "", Theme::kTextSecondary, 0.0f, 100.0f, 1.0f,
-               [this](float value) { state_.firefly_clamp = value; }) {}
+               [this](float value) { state_.firefly_clamp = value; }),
+      adaptive_thresh_("Threshold", state.adaptive_sampling_threshold, "", Theme::kTextSecondary, 0.001f, 0.20f, 0.005f,
+                       [this](float value) { state_.adaptive_sampling_threshold = std::clamp(value, 0.001f, 0.20f); }) {}
 
 Rect RenderSetupDialog::panel_bounds(const Rect& bounds) {
     layout(bounds);
@@ -80,12 +82,6 @@ void RenderSetupDialog::draw(Graphics& gfx, const Rect& bounds) {
     // Section 1: RENDERER
     draw_section(gfx, engine_card_, "RENDERER");
     draw_button(gfx, renderer_rect_, "ZeGFX  ▾", true);
-    if (renderer_menu_open_) {
-        gfx.fill_rect(renderer_menu_rect_, Theme::kPanelHeaderBg);
-        gfx.draw_rect(renderer_menu_rect_, Theme::kBorderBright, 1.0f);
-        gfx.fill_rect(renderer_active_item_rect_, Theme::kSelectionBg);
-        gfx.draw_text("ZeGFX  ·  Active", renderer_active_item_rect_, Theme::kTextPrimary, Theme::kSmallFont, true, false, true, Theme::kUiFontFamily);
-    }
 
     // Section 2: OUTPUT
     draw_section(gfx, output_card_, "OUTPUT & FORMAT");
@@ -131,16 +127,20 @@ void RenderSetupDialog::draw(Graphics& gfx, const Rect& bounds) {
     firefly_.set_value(state_.firefly_clamp);
     firefly_.set_bounds(firefly_rect_);
     firefly_.draw(gfx);
-    gfx.draw_text("ZeGFX Production Engine · Raytraced samples · Higher values reduce noise.",
+    draw_button(gfx, light_tree_toggle_rect_,
+                state_.light_tree_enabled ? "Hierarchical Light Tree (O(log N))  ·  On" : "Hierarchical Light Tree  ·  Off",
+                state_.light_tree_enabled);
+    draw_button(gfx, adaptive_toggle_rect_,
+                state_.adaptive_sampling_enabled ? "Adaptive  ·  On" : "Adaptive  ·  Off",
+                state_.adaptive_sampling_enabled);
+    adaptive_thresh_.set_value(state_.adaptive_sampling_threshold);
+    adaptive_thresh_.set_bounds(adaptive_thresh_rect_);
+    adaptive_thresh_.draw(gfx);
+    draw_button(gfx, denoise_toggle_rect_,
+                state_.denoiser_enabled ? "Wavelet Denoising (EAW)  ·  Enabled" : "Wavelet Denoising (EAW)  ·  Disabled",
+                state_.denoiser_enabled);
+    gfx.draw_text("ZeGFX Light Tree BVH · Welford Adaptive Sampler · Multiscale Wavelet Denoising.",
                   quality_note_rect_, Theme::kTextMuted, 9.5f, false, false, true, Theme::kUiFontFamily);
-
-    if (renderer_menu_open_) {
-        gfx.fill_rect(renderer_menu_rect_, Theme::kPanelHeaderBg);
-        gfx.draw_rect(renderer_menu_rect_, Theme::kBorderBright, 1.0f);
-        gfx.fill_rect(renderer_active_item_rect_, Theme::kSelectionBg);
-        gfx.draw_text("ZeGFX  ·  Active", renderer_active_item_rect_, Theme::kTextPrimary,
-                      Theme::kSmallFont, true, false, true, Theme::kUiFontFamily);
-    }
 
     // Section 4: Footer Action Bar
     gfx.draw_line(Point(settings_panel_.x + 16.0f, footer_rect_.y - 6.0f), Point(settings_panel_.right() - 16.0f, footer_rect_.y - 6.0f), Theme::kBorderSubtle, 1.0f);
@@ -148,6 +148,10 @@ void RenderSetupDialog::draw(Graphics& gfx, const Rect& bounds) {
                   Theme::kTextMuted, 9.0f, false, false, true, Theme::kUiFontFamily);
     draw_button(gfx, cancel_rect_, "Cancel", false);
     draw_button(gfx, render_rect_, "Render Sequence", true, true);
+
+    if (renderer_menu_.is_open()) {
+        renderer_menu_.draw(gfx);
+    }
 }
 
 void RenderSetupDialog::draw_render_preview(Graphics& gfx, const Rect& previewRect) {
@@ -416,7 +420,7 @@ bool RenderSetupDialog::handle_mouse_down(const MouseEvent& event, const Rect& b
     // Check click on close button
     if (close_btn_rect_.contains(event.pos)) {
         finish_field(false);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         return true;
     }
@@ -424,24 +428,35 @@ bool RenderSetupDialog::handle_mouse_down(const MouseEvent& event, const Rect& b
     // Clicking outside modal panel dismisses it
     if (!panel_.contains(event.pos)) {
         finish_field(false);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         return true;
+    }
+
+    if (renderer_menu_.is_open()) {
+        if (renderer_rect_.contains(event.pos)) {
+            renderer_menu_.close();
+            return true;
+        }
+        if (renderer_menu_.contains(event.pos)) {
+            return renderer_menu_.handle_mouse_down(event);
+        }
+        renderer_menu_.close();
     }
 
     // Only handle setting controls if inside settings_panel_
     if (!settings_panel_.contains(event.pos)) return true;
 
     if (renderer_rect_.contains(event.pos)) {
-        renderer_menu_open_ = !renderer_menu_open_;
+        renderer_menu_.clear();
+        renderer_menu_.add_check("ZeGFX Production Renderer", "space_render", true, nullptr);
+        renderer_menu_.add_check("DirectX 12 Accelerated", "", true, nullptr);
+        renderer_menu_.add_separator("ENGINE FEATURES");
+        renderer_menu_.add_item("BVH Light Tree (O(log N))", "light_point", "", nullptr, false);
+        renderer_menu_.add_item("Welford Adaptive Sampler", "action_render", "", nullptr, false);
+        renderer_menu_.add_item("Wavelet Denoiser (EAW)", "render_denoise", "", nullptr, false);
+        renderer_menu_.open(renderer_rect_, Rect(0.0f, 0.0f, 4000.0f, 3000.0f), 240.0f, 340.0f);
         return true;
-    }
-    if (renderer_menu_open_) {
-        if (renderer_menu_rect_.contains(event.pos)) {
-            renderer_menu_open_ = false;
-            return true;
-        }
-        renderer_menu_open_ = false;
     }
 
     if (scene_range_rect_.contains(event.pos)) {
@@ -479,21 +494,33 @@ bool RenderSetupDialog::handle_mouse_down(const MouseEvent& event, const Rect& b
     if (exr_rect_.contains(event.pos)) { finish_field(true); state_.render_output_exr = true; return true; }
     if (browse_rect_.contains(event.pos)) {
         finish_field(true);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         state_.pending_command = "render_output_browse";
         return true;
     }
-    if (samples_.handle_mouse_down(event) || firefly_.handle_mouse_down(event)) return true;
+    if (samples_.handle_mouse_down(event) || firefly_.handle_mouse_down(event) || adaptive_thresh_.handle_mouse_down(event)) return true;
+    if (light_tree_toggle_rect_.contains(event.pos)) {
+        state_.light_tree_enabled = !state_.light_tree_enabled;
+        return true;
+    }
+    if (adaptive_toggle_rect_.contains(event.pos)) {
+        state_.adaptive_sampling_enabled = !state_.adaptive_sampling_enabled;
+        return true;
+    }
+    if (denoise_toggle_rect_.contains(event.pos)) {
+        state_.denoiser_enabled = !state_.denoiser_enabled;
+        return true;
+    }
     if (cancel_rect_.contains(event.pos)) {
         finish_field(false);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         return true;
     }
     if (render_rect_.contains(event.pos)) {
         finish_field(true);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         state_.pending_command = "render_sequence";
         return true;
@@ -504,7 +531,10 @@ bool RenderSetupDialog::handle_mouse_down(const MouseEvent& event, const Rect& b
 
 bool RenderSetupDialog::handle_mouse_move(const MouseEvent& event, const Rect& bounds) {
     layout(bounds);
-    const bool changed = samples_.handle_mouse_move(event) | firefly_.handle_mouse_move(event);
+    bool changed = samples_.handle_mouse_move(event) | firefly_.handle_mouse_move(event) | adaptive_thresh_.handle_mouse_move(event);
+    if (renderer_menu_.is_open()) {
+        if (renderer_menu_.handle_mouse_move(event)) changed = true;
+    }
     const bool moved = event.pos.x != last_mouse_.x || event.pos.y != last_mouse_.y;
     last_mouse_ = event.pos;
     return changed || moved;
@@ -514,6 +544,7 @@ bool RenderSetupDialog::handle_mouse_up(const MouseEvent& event, const Rect& bou
     layout(bounds);
     samples_.handle_mouse_up(event);
     firefly_.handle_mouse_up(event);
+    adaptive_thresh_.handle_mouse_up(event);
     return true;
 }
 
@@ -521,7 +552,7 @@ bool RenderSetupDialog::handle_key_down(const KeyEvent& event) {
     const uint32_t key = event.key_code;
     if (key == 27) { // Escape closes dialog
         finish_field(false);
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         return true;
     }
@@ -558,7 +589,7 @@ bool RenderSetupDialog::handle_key_down(const KeyEvent& event) {
         return true;
     }
     if (key == 13) {
-        renderer_menu_open_ = false;
+        renderer_menu_.close();
         state_.render_setup_open = false;
         state_.pending_command = "render_sequence";
     } else if (key == 9) {
@@ -634,10 +665,15 @@ void RenderSetupDialog::layout(const Rect& bounds) {
     browse_rect_ = Rect(oright - 86.0f, output_card_.y + 178.0f, 86.0f, 24.0f);
     path_text_rect_ = Rect(ol, browse_rect_.y, browse_rect_.x - ol - 8.0f, 24.0f);
 
-    quality_card_ = Rect(left, settings_panel_.y + 344.0f, inner, 96.0f);
+    quality_card_ = Rect(left, settings_panel_.y + 344.0f, inner, 156.0f);
     samples_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 22.0f, (inner - 26.0f) * 0.5f, 24.0f);
     firefly_rect_ = Rect(samples_rect_.right() + 6.0f, samples_rect_.y, samples_rect_.width, 24.0f);
-    quality_note_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 50.0f, inner - 20.0f, 36.0f);
+    light_tree_toggle_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 50.0f, inner - 20.0f, 22.0f);
+    const float adw = (inner - 26.0f) * 0.52f;
+    adaptive_toggle_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 76.0f, adw, 22.0f);
+    adaptive_thresh_rect_ = Rect(adaptive_toggle_rect_.right() + 6.0f, adaptive_toggle_rect_.y, inner - 20.0f - adw - 6.0f, 22.0f);
+    denoise_toggle_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 102.0f, inner - 20.0f, 22.0f);
+    quality_note_rect_ = Rect(quality_card_.x + 10.0f, quality_card_.y + 128.0f, inner - 20.0f, 24.0f);
 
     footer_rect_ = Rect(left, settings_panel_.bottom() - 60.0f, inner, 50.0f);
     footer_hint_rect_ = Rect(left, footer_rect_.y, inner, 15.0f);

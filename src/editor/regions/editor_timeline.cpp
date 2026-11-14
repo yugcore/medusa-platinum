@@ -73,11 +73,11 @@ void TimelineRegion::layout(const Rect &bounds) {
 
 void TimelineRegion::draw(Graphics &gfx) {
     gfx.fill_rect(bounds_, Theme::kPanelBg);
-    gfx.draw_line(Point(bounds_.x, bounds_.y), Point(bounds_.right(), bounds_.y), Theme::kBorderSubtle, 1.0f);
+    gfx.draw_line(Point(bounds_.x, bounds_.y), Point(bounds_.right(), bounds_.y), Theme::kDockDivider, 1.0f);
 
     // 1. Header Bar background & bottom dividing line
     gfx.fill_rect(header_rect_, Theme::kPanelHeaderBg);
-    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kBorderSubtle, 1.0f);
+    gfx.draw_line(Point(header_rect_.x, header_rect_.bottom()), Point(header_rect_.right(), header_rect_.bottom()), Theme::kDockDivider, 1.0f);
 
     // Editor Icon (Timeline clock face + small ▾)
     IconRenderer::draw_icon(gfx, "space_timeline", time_icon_rect_, Theme::kTextSecondary);
@@ -85,22 +85,23 @@ void TimelineRegion::draw(Graphics &gfx) {
                   Theme::kTextMuted, 8.0f, false, false, true);
 
     // Menus
-    for (auto &btn : menu_buttons_) {
+    for (size_t i = 0; i < menu_buttons_.size(); ++i) {
+        auto &btn = menu_buttons_[i];
         btn.set_active((btn.get_label() == "View" && state_.show_timeline_keyframes) ||
-                       (btn.get_label() == "Playback ▾" && state_.is_playing));
+                       (i == 2 && popup_menu_.is_open()));
         btn.draw(gfx);
     }
 
     // 2. Center Group: Autokey + Grouped Transport Pill + Keying
     // Autokey button
-    gfx.fill_rect(autokey_rect_, state_.is_autokey ? Theme::kSelectionBg : Theme::kControlBg);
-    gfx.draw_rect(autokey_rect_, state_.is_autokey ? Theme::kAccentBorder : Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(autokey_rect_, 3.0f, state_.is_autokey ? Theme::kSelectionBg : Theme::kControlBg);
+    gfx.draw_rounded_rect(autokey_rect_, 3.0f, state_.is_autokey ? Theme::kAccentBorder : Theme::kBorderBright, 1.0f);
     Color autokey_col = state_.is_autokey ? Theme::kAccent : Theme::kTextMuted;
     IconRenderer::draw_icon(gfx, "anim_autokey", Rect(autokey_rect_.x + 4.0f, autokey_rect_.y + 4.0f, 12.0f, 12.0f), autokey_col);
 
-    // Transport Pill Container
-    gfx.fill_rect(transport_pill_rect_, Theme::kControlBg);
-    gfx.draw_rect(transport_pill_rect_, Theme::kBorderSubtle, 1.0f);
+    // Transport Pill Container (Rounded Capsule)
+    gfx.fill_rounded_rect(transport_pill_rect_, 4.0f, Theme::kControlBg);
+    gfx.draw_rounded_rect(transport_pill_rect_, 4.0f, Theme::kBorderBright, 1.0f);
     for (size_t i = 0; i < transport_buttons_.size(); ++i) {
         if (i == 2) transport_buttons_[i].set_active(state_.is_playing && state_.playback_reverse);
         else if (i == 3) transport_buttons_[i].set_active(state_.is_playing && !state_.playback_reverse);
@@ -109,22 +110,22 @@ void TimelineRegion::draw(Graphics &gfx) {
     // Hairline separators between transport buttons
     for (size_t i = 1; i < transport_buttons_.size(); ++i) {
         float sep_x = transport_buttons_[i].get_bounds().x;
-        gfx.draw_line(Point(sep_x, transport_pill_rect_.y + 2.0f),
-                      Point(sep_x, transport_pill_rect_.bottom() - 2.0f),
-                      Theme::kBorderSubtle, 0.75f);
+        gfx.draw_line(Point(sep_x, transport_pill_rect_.y + 3.0f),
+                      Point(sep_x, transport_pill_rect_.bottom() - 3.0f),
+                      Theme::kBorderBright, 0.75f);
     }
 
     // Keying dropdown pill
-    gfx.fill_rect(keying_rect_, Theme::kControlBg);
-    gfx.draw_rect(keying_rect_, Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(keying_rect_, 3.0f, Theme::kControlBg);
+    gfx.draw_rounded_rect(keying_rect_, 3.0f, Theme::kBorderBright, 1.0f);
     IconRenderer::draw_icon(gfx, "anim_keying", Rect(keying_rect_.x + 3.0f, keying_rect_.y + 4.0f, 11.0f, 11.0f), Theme::kTextSecondary);
     gfx.draw_text("▾", Rect(keying_rect_.right() - 8.0f, keying_rect_.y, 7.0f, keying_rect_.height),
                   Theme::kTextMuted, 7.5f, false, false, true);
 
     // 3. Right Group: [ 1 ]  (clock)  [ Start 1 | End 250 ]  (sync)
     // Current Frame Pill
-    gfx.fill_rect(frame_box_rect_, Theme::kControlBg);
-    gfx.draw_rect(frame_box_rect_, Theme::kAccentBorder, 1.0f);
+    gfx.fill_rounded_rect(frame_box_rect_, 3.0f, Theme::kControlBg);
+    gfx.draw_rounded_rect(frame_box_rect_, 3.0f, Theme::kAccentBorder, 1.0f);
     gfx.draw_text(std::to_string(state_.current_frame), frame_box_rect_, Theme::kTextPrimary, Theme::kUiFont, true, true, true, Theme::kNumericFontFamily);
 
     // Clock Mode Toggle Button
@@ -132,8 +133,8 @@ void TimelineRegion::draw(Graphics &gfx) {
                   true, true, true, Theme::kNumericFontFamily);
 
     // Grouped Start / End Capsule Pill
-    gfx.fill_rect(range_rect_, Theme::kControlBg);
-    gfx.draw_rect(range_rect_, Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(range_rect_, 3.0f, Theme::kControlBg);
+    gfx.draw_rounded_rect(range_rect_, 3.0f, Theme::kBorderBright, 1.0f);
 
     gfx.draw_text("Start", Rect(range_rect_.x + 7.0f, range_rect_.y, 30.0f, range_rect_.height), Theme::kTextSecondary, Theme::kSmallFont, false, false, true, Theme::kUiFontFamily);
     const bool editingStart = state_.timeline_range_edit_field == EditorState::TimelineRangeField::Start;
@@ -161,8 +162,8 @@ void TimelineRegion::draw(Graphics &gfx) {
                   Theme::kNumericFontFamily);
 
     // Playback rate is a real control; click to cycle through common rates.
-    gfx.fill_rect(fps_rect_, Theme::kControlBg);
-    gfx.draw_rect(fps_rect_, Theme::kBorderSubtle, 1.0f);
+    gfx.fill_rounded_rect(fps_rect_, 3.0f, Theme::kControlBg);
+    gfx.draw_rounded_rect(fps_rect_, 3.0f, Theme::kBorderBright, 1.0f);
     gfx.draw_text(std::to_string(state_.playback_fps) + " fps", fps_rect_,
                   Theme::kTextSecondary, Theme::kSmallFont, false, true, true,
                   Theme::kNumericFontFamily);
@@ -174,7 +175,23 @@ void TimelineRegion::draw(Graphics &gfx) {
     sequencer_.draw(gfx);
 }
 
+void TimelineRegion::draw_popup(Graphics &gfx) {
+    popup_menu_.draw(gfx);
+}
+
 bool TimelineRegion::handle_mouse_down(const MouseEvent &e) {
+    if (popup_menu_.is_open()) {
+        if (menu_buttons_.size() > 2 && menu_buttons_[2].get_bounds().contains(e.pos)) {
+            popup_menu_.close();
+            return true;
+        }
+        if (popup_menu_.contains(e.pos)) {
+            return popup_menu_.handle_mouse_down(e);
+        }
+        popup_menu_.close();
+        if (!bounds_.contains(e.pos)) return false;
+    }
+
     if (state_.timeline_range_edit_field != EditorState::TimelineRangeField::None &&
         !(e.button == MouseButton::Left && range_rect_.contains(e.pos)))
         state_.finish_timeline_range_edit(true);
@@ -221,6 +238,9 @@ bool TimelineRegion::handle_mouse_move(const MouseEvent &e) {
         if (btn.handle_mouse_move(e)) changed = true;
     }
     if (sequencer_.handle_mouse_move(e)) changed = true;
+    if (popup_menu_.is_open()) {
+        if (popup_menu_.handle_mouse_move(e)) changed = true;
+    }
     return changed;
 }
 
@@ -310,18 +330,60 @@ void TimelineRegion::refresh_channels() {
     cached_workspace_ = state_.active_workspace;
 }
 
+void TimelineRegion::open_playback_menu() {
+    popup_menu_.clear();
+    popup_menu_.add_check(state_.is_playing ? "Pause" : "Play", "anim_play", state_.is_playing, [this]() {
+        state_.is_playing = !state_.is_playing;
+    }, "Space");
+    popup_menu_.add_check("Play Reverse", "anim_play_reverse", state_.is_playing && state_.playback_reverse, [this]() {
+        if (state_.is_playing && state_.playback_reverse) state_.is_playing = false;
+        else { state_.playback_reverse = true; state_.is_playing = true; }
+    });
+    popup_menu_.add_separator();
+    popup_menu_.add_item("Jump to Start Frame", "anim_jump_start", "Shift+Left", [this]() {
+        state_.current_frame = state_.start_frame;
+        state_.evaluate_keyframes();
+    });
+    popup_menu_.add_item("Jump to End Frame", "anim_jump_end", "Shift+Right", [this]() {
+        state_.current_frame = state_.end_frame;
+        state_.evaluate_keyframes();
+    });
+    popup_menu_.add_separator("PLAYBACK RATE");
+    popup_menu_.add_check("24 FPS (Cinema Standard)", "", state_.playback_fps == 24, [this]() {
+        state_.playback_fps = 24;
+    });
+    popup_menu_.add_check("30 FPS (Video Standard)", "", state_.playback_fps == 30, [this]() {
+        state_.playback_fps = 30;
+    });
+    popup_menu_.add_check("60 FPS (High Frame Rate)", "", state_.playback_fps == 60, [this]() {
+        state_.playback_fps = 60;
+    });
+    popup_menu_.add_separator("KEYFRAMING");
+    popup_menu_.add_check("Auto-Keyframing", "anim_autokey", state_.is_autokey, [this]() {
+        state_.is_autokey = !state_.is_autokey;
+    });
+
+    if (menu_buttons_.size() > 2) {
+        Rect anchor = menu_buttons_[2].get_bounds();
+        popup_menu_.open(anchor, Rect(0.0f, 0.0f, 4000.0f, 3000.0f), 220.0f, 320.0f);
+    }
+}
+
 void TimelineRegion::init_header() {
     menu_buttons_.emplace_back("View", "", [this]() {
         state_.show_timeline_keyframes = !state_.show_timeline_keyframes;
     });
     menu_buttons_.emplace_back("Marker", "", [this]() { state_.insert_keyframe(); });
-    menu_buttons_.emplace_back("Playback ▾", "", [this]() { state_.is_playing = !state_.is_playing; });
+    menu_buttons_.emplace_back("Playback ▾", "", [this]() {
+        if (popup_menu_.is_open()) popup_menu_.close();
+        else open_playback_menu();
+    });
     for (auto &btn : menu_buttons_) {
         btn.set_flat(true);
     }
     menu_buttons_[0].set_tooltip("Show or hide keyframe markers");
     menu_buttons_[1].set_tooltip("Insert a keyframe at the current frame");
-    menu_buttons_[2].set_tooltip("Start or stop playback");
+    menu_buttons_[2].set_tooltip("Playback options and transport controls");
 
     transport_buttons_.emplace_back("", "anim_jump_start", [this]() { state_.current_frame = state_.start_frame; state_.evaluate_keyframes(); });
     transport_buttons_.emplace_back("", "anim_step_back", [this]() { state_.current_frame = std::max(state_.start_frame, state_.current_frame - 1); state_.evaluate_keyframes(); });

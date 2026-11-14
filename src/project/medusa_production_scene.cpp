@@ -1,4 +1,5 @@
 #include <medusa/medusa_production_scene.hpp>
+#include <medusa/usd/usd_hydra_stage.hpp>
 #include <algorithm>
 #include <utility>
 
@@ -377,6 +378,9 @@ void transform_imported_tangent_to_node_space(const float world[16], float tange
 
 bool load_production_scene(const std::string& path, zegfx::ProductionScene& scene, std::string& error) {
     if (is_builtin_production_scene(path)) return create_builtin_cube_scene(scene, error);
+    if (medusa::usd::is_usd_file(path)) {
+        return medusa::usd::import_usd_stage(path, scene, error);
+    }
     auto imported = zegfx::asset::importAsset(path, {});
     if (!imported.success) { error = imported.error; return false; }
     ComPtr<IWICImagingFactory> imagingFactory;
